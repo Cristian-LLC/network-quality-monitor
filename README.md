@@ -138,15 +138,38 @@ This is normal on macOS with Bash 3.2. The script will automatically adapt to us
 
 The `targets.json` file uses the following format:
 
+```json
 [
   {
-    "ip": "1.1.1.1",                   // IP address or hostname to monitor
-    "ping_frequency": 1,               // Ping frequency in seconds
-    "consecutive_loss_threshold": 2,   // How many lost packets for DOWN alert
-    "loss_threshold_pct": 10,          // Loss percentage threshold for LOSS alert
-    "report_interval": 10              // Report interval in seconds
+    "ip": "1.1.1.1",
+    "ping_frequency": 1,
+    "consecutive_loss_threshold": 2,
+    "loss_threshold_pct": 10,
+    "report_interval": 10
   }
 ]
+```
+
+#### Configuration Fields Explained
+
+Each target in the configuration has the following fields:
+
+| Field | Type | Description | Example |
+|---|---|---|---|
+| `ip` | String | The IP address or hostname to monitor. Can be any valid IP address or domain name. | `"1.1.1.1"`, `"google.com"` |
+| `ping_frequency` | Number | How often to send ping packets, in seconds. Lower values give more granular data but increase network traffic. | `1` for one ping per second |
+| `consecutive_loss_threshold` | Number | How many ping packets must be lost in a row before declaring a host DOWN. Higher values prevent false alarms due to transient packet loss. | `2` means DOWN after 2 consecutive lost pings |
+| `loss_threshold_pct` | Number | The percentage of packet loss that triggers a LOSS ALERT. This is calculated over the report interval. | `10` means alert when 10% or more packets are lost |
+| `report_interval` | Number | How often to generate a status report, in seconds. This also determines the window for calculating packet loss percentage. | `10` for a report every 10 seconds |
+
+#### Configuration Tips
+
+- For mission-critical services, use lower `consecutive_loss_threshold` values (1-2)
+- For less critical services or unstable networks, use higher threshold values (3-5) to reduce alert noise
+- Adjust `report_interval` based on your monitoring needs:
+  - Shorter intervals (5-10s) for real-time monitoring
+  - Longer intervals (30-60s) for long-term trend analysis with less output
+- The `ping_frequency` of 1 second is suitable for most use cases, but can be increased for less important targets
 
 ## Output Metrics Explained
 
