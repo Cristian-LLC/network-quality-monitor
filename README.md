@@ -274,52 +274,141 @@ You can configure the script to send alerts to Slack channels when important eve
 
 ##### Step 1: Create a Slack App and Webhook
 
-1. Go to [Slack API Apps page](https://api.slack.com/apps)
-2. Click "Create New App" and choose "From scratch"
-3. Name your app (e.g., "Network Monitor") and select your workspace
-4. In the sidebar, click on "Incoming Webhooks"
-5. Toggle "Activate Incoming Webhooks" to On
-6. Click "Add New Webhook to Workspace"
-7. Select the channel to post to by default (you can override this later)
-8. Click "Allow"
-9. Copy the Webhook URL shown on the page (starts with https://hooks.slack.com/services/)
+1. **Sign in to your Slack workspace**:
+   - Go to [Slack web interface](https://slack.com/signin)
+   - Sign in to the workspace where you want to receive notifications
+
+2. **Create a new Slack app**:
+   - Go to [Slack API Apps page](https://api.slack.com/apps)
+   - Click the green "Create New App" button
+   - Select "From scratch"
+   - Enter "Network Monitor" as the App Name
+   - Select your workspace from the dropdown
+   - Click "Create App"
+
+3. **Enable Incoming Webhooks**:
+   - On the left sidebar, under "Features", click on "Incoming Webhooks"
+   - Toggle the switch to turn on "Activate Incoming Webhooks"
+
+4. **Create a new webhook**:
+   - Scroll down to the bottom of the page
+   - Click the green "Add New Webhook to Workspace" button
+   - From the popup, select the channel where you want to receive notifications
+     (e.g., #network-alerts or create a new channel specifically for monitoring)
+   - Click "Allow" to authorize the app
+
+5. **Copy your webhook URL**:
+   - A new webhook URL will appear in the table
+   - Click the "Copy" button next to your new webhook URL
+   - Keep this URL secure - anyone with this URL can post to your Slack workspace
+   - The URL will look like: `https://hooks.slack.com/services/T00XXX/B00XXX/XXXXXX`
+
+6. **Verify webhook permissions** (optional but recommended):
+   - On the left sidebar, click on "OAuth & Permissions"
+   - Scroll down to "Scopes"
+   - Ensure "incoming-webhook" is listed under "Bot Token Scopes"
 
 ##### Step 2: Configure Network Quality Monitor
 
-1. Edit `notifications/notification_config.json`:
-   ```json
-   {
-     "slack": {
-       "enabled": true,
-       "webhook_url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
-       "default_channel": "#network-alerts",
-       "notifications": {
-         "host_down": {
-           "channel": "#network-alerts",
-           "throttle_minutes": 5
-         },
-         "loss_alert": {
-           "channel": "#network-warnings",
-           "throttle_minutes": 15
-         },
-         "recovery": {
-           "channel": "#network-alerts",
-           "throttle_minutes": 0
+1. **Locate or create the configuration file**:
+   - Open a terminal and navigate to your Network Quality Monitor directory
+   - Make sure the `notifications` directory exists:
+     ```bash
+     mkdir -p notifications
+     ```
+   - Edit the configuration file:
+     ```bash
+     nano notifications/notification_config.json
+     ```
+     (or use any text editor you prefer)
+
+2. **Add the Slack configuration**:
+   - Copy and paste the following JSON into the file:
+     ```json
+     {
+       "slack": {
+         "enabled": true,
+         "webhook_url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+         "default_channel": "#network-alerts",
+         "notifications": {
+           "host_down": {
+             "channel": "#network-alerts",
+             "throttle_minutes": 5
+           },
+           "loss_alert": {
+             "channel": "#network-warnings",
+             "throttle_minutes": 15
+           },
+           "recovery": {
+             "channel": "#network-alerts",
+             "throttle_minutes": 0
+           }
          }
        }
      }
-   }
-   ```
-2. Replace `"https://hooks.slack.com/services/YOUR/WEBHOOK/URL"` with the actual webhook URL you copied
-3. Set `"enabled": true` to activate Slack notifications
-4. Customize the channels for each notification type if desired
+     ```
+
+3. **Update the webhook URL**:
+   - Replace `"https://hooks.slack.com/services/YOUR/WEBHOOK/URL"` with your actual webhook URL
+   - Double-check that you've copied the entire URL correctly
+   - Save the file
+
+4. **Customize channels** (optional):
+   - For each notification type, you can specify a different Slack channel
+   - Make sure the channels exist in your Slack workspace
+   - Always include the `#` prefix for channel names
+
+5. **Adjust throttling** (optional):
+   - `throttle_minutes` controls how often the same type of notification can be sent for the same host
+   - Set to `0` for no throttling (every event triggers a notification)
+   - Set to higher values to reduce notification frequency during persistent issues
 
 ##### Step 3: Test Your Configuration
 
-1. Run the monitoring script: `./ping.sh`
-2. If you want to test notifications without waiting for actual network issues:
-   - Temporarily modify a target IP to an invalid one to trigger "host down" notifications
-   - Or set a very low `loss_threshold_pct` value to trigger loss alerts more easily
+1. **Make sure dependencies are installed**:
+   ```bash
+   # For macOS
+   brew install curl jq
+
+   # For Debian/Ubuntu
+   sudo apt install curl jq
+
+   # For RHEL/CentOS/Fedora
+   sudo yum install curl jq
+   ```
+
+2. **Set correct permissions**:
+   ```bash
+   chmod +x ping.sh hooks.sh notifications/slack.sh
+   ```
+
+3. **Test your Slack configuration directly**:
+   ```bash
+   # Run the built-in test function
+   source notifications/slack.sh
+   test_slack_configuration "Test message from setup"
+   ```
+   This will validate your webhook URL and send a test message to your configured Slack channel.
+
+4. **Run the monitoring script**:
+   ```bash
+   ./ping.sh --debug
+   ```
+   The `--debug` flag will show more information, including Slack notification attempts.
+
+5. **Test notifications through hooks** (optional):
+   - For a quick test without waiting for actual network issues:
+     ```bash
+     # Source the required files
+     source hooks.sh
+
+     # Then send a test notification
+     hook_on_host_down "test-host" "3"
+     ```
+
+6. **Verify in Slack**:
+   - Check the configured Slack channel for a notification message
+   - If you don't see a message, check the debug output for any errors
 
 ##### Example Notification Appearance
 
@@ -334,6 +423,46 @@ Host 1.1.1.1 is DOWN after 2 consecutive losses.
 
 Network Quality Monitor • Today at 12:34 PM
 ```
+
+##### Troubleshooting Slack Integration
+
+If you're having trouble with Slack notifications, check these common issues:
+
+1. **Webhook URL issues**:
+   - Verify your webhook URL is correctly copied from Slack
+   - Ensure there are no extra spaces or characters in the URL
+   - The URL should start with `https://hooks.slack.com/services/`
+
+2. **Permission problems**:
+   - Make sure your Slack app has permission to post to the designated channels
+   - If using private channels, the app must be invited to those channels
+
+3. **Network connectivity**:
+   - Verify the server running the script has internet access
+   - Check that outbound HTTPS (port 443) is not blocked by firewalls
+
+4. **Missing dependencies**:
+   - Run `which curl` and `which jq` to ensure both are installed
+   - If missing, install them as described in the "Test Your Configuration" section
+
+5. **Script errors**:
+   - Run with `--debug` flag to see detailed output
+   - Look for error messages related to Slack or webhook calls
+
+6. **Rate limiting**:
+   - If you're sending too many requests to Slack, you might hit rate limits
+   - Check for "rate_limited" error messages in debug output
+
+7. **Channel names**:
+   - Ensure channel names include the `#` prefix
+   - Verify the channels exist in your workspace
+
+8. **Manual test**:
+   - Try sending a test message directly to your webhook:
+     ```bash
+     curl -X POST -H 'Content-type: application/json' --data '{"text":"Test message from Network Monitor"}' YOUR_WEBHOOK_URL
+     ```
+   - You should get an "ok" response if successful
 
 #### Slack Configuration Reference
 
