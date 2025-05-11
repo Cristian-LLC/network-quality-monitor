@@ -10,7 +10,7 @@
 # Version: 1.0.0
 #
 
-# Load specific notification modules if they exist
+# Load Slack notification module
 if [ -f "notifications/slack.sh" ]; then
   source notifications/slack.sh
 fi
