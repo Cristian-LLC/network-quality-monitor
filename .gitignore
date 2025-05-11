@@ -1,0 +1,19 @@
+# IDE and editor files
+**/.idea/
+**/.vscode/
+**/.DS_Store
+**/.claude/settings.local.json
+
+# Temp files
+**/tmp/
+**/temp/
+*.tmp
+*.log
+
+# Custom config files that might contain sensitive data
+custom*.json
+
+# Backup files
+*.bak
+*~
+*.swp

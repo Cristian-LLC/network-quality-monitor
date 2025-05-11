@@ -1,0 +1,30 @@
+[
+  {
+    "ip": "1.1.1.1",
+    "ping_frequency": 1,
+    "consecutive_loss_threshold": 2,
+    "loss_threshold_pct": 10,
+    "report_interval": 10
+  },
+  {
+    "ip": "8.8.8.8",
+    "ping_frequency": 1,
+    "consecutive_loss_threshold": 3,
+    "loss_threshold_pct": 5,
+    "report_interval": 15
+  },
+  {
+    "ip": "google.com",
+    "ping_frequency": 1,
+    "consecutive_loss_threshold": 2,
+    "loss_threshold_pct": 5,
+    "report_interval": 10
+  },
+  {
+    "ip": "microsoft.com",
+    "ping_frequency": 1,
+    "consecutive_loss_threshold": 2,
+    "loss_threshold_pct": 5,
+    "report_interval": 15
+  }
+]
