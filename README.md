@@ -310,12 +310,9 @@ You can configure the script to send alerts to Slack channels when important eve
 
 ##### Step 2: Configure Network Quality Monitor
 
-1. **Locate or create the configuration file**:
+1. **Locate the configuration file**:
    - Open a terminal and navigate to your Network Quality Monitor directory
-   - Make sure the `notifications` directory exists:
-     ```bash
-     mkdir -p notifications
-     ```
+   - The script already includes a `notifications` directory with the necessary files
    - Edit the configuration file:
      ```bash
      nano notifications/notification_config.json
