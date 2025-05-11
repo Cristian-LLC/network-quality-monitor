@@ -541,6 +541,11 @@ monitor_target() {
         if ! $NETWORK_OK; then
           alert "$GREEN" "[$IP] [UP] ✅ RECOVERED: ping OK (${TIME_MS} ms)"
           NETWORK_OK=true
+
+          # Call hook if available
+          if type hook_on_host_recovery &>/dev/null; then
+            hook_on_host_recovery "$IP" "${TIME_MS}"
+          fi
         fi
       elif [[ "$line" == *"unreachable"* || "$line" == *"timeout"* || "$line" == *"timed out"* ]]; then
         # Failed ping
@@ -551,6 +556,11 @@ monitor_target() {
         if "$NETWORK_OK" && [ $CONSECUTIVE_LOSS -ge "$MAX_CONSECUTIVE_LOSS" ]; then
           alert "$RED" "[$IP] [DOWN] 🛑 ${CONSECUTIVE_LOSS} consecutive losses!"
           NETWORK_OK=false
+
+          # Call hook if available
+          if type hook_on_host_down &>/dev/null; then
+            hook_on_host_down "$IP" "$CONSECUTIVE_LOSS"
+          fi
         fi
       fi
       
@@ -573,6 +583,11 @@ monitor_target() {
           # This prevents showing loss alerts for hosts we already know are down
           if $NETWORK_OK; then
             alert "$RED" "[$IP] 📉 [LOSS ALERT] Excessive packet loss in the last ${REPORT_INTERVAL} seconds: ${LOSS_PERCENT}%"
+
+            # Call hook if available
+            if type hook_on_loss_alert &>/dev/null; then
+              hook_on_loss_alert "$IP" "${LOSS_PERCENT}" "${REPORT_INTERVAL}"
+            fi
           fi
         elif (( $(echo "$LOSS_PERCENT > 0" | bc -l) )); then
           LOSS_COLOR=$YELLOW
@@ -669,6 +684,13 @@ monitor_target() {
 
           # Display report only for UP hosts
           echo -e "$(date '+%Y-%m-%d %H:%M:%S') ${COLOR}[$IP] $STATUS_LABEL | OK: $OK_PINGS, ${LOSS_COLOR}Lost:${NC} ${LOSS_COLOR}$LOST_PINGS (${LOSS_PERCENT}%)${NC}, ${RTT_LABEL_COLOR}RTT:${NC} ${MIN_RTT_COLOR}${MIN_RTT}${NC}/${AVG_RTT_COLOR}${RTT_AVG}${NC}/${MAX_RTT_COLOR}${MAX_RTT}${NC}, ${TTL_COLOR}TTL:${NC} ${TTL_COLOR}${TTL}${NC}, ${JITTER_COLOR}Jitter:${NC} ${JITTER_COLOR}${JITTER}${NC}, ${MOS_COLOR}MOS:${NC} ${MOS_COLOR}${MOS}${NC}, ${MOS_COLOR}R-factor:${NC} ${MOS_COLOR}${R_FACTOR}${NC}"
+
+          # Call hook if available - passing metrics as JSON for extensibility
+          if type hook_on_status_report &>/dev/null; then
+            local status_json
+            status_json="{\"ip\":\"$IP\",\"status\":\"up\",\"timestamp\":\"$(date +%s)\",\"metrics\":{\"ok_pings\":$OK_PINGS,\"lost_pings\":$LOST_PINGS,\"loss_percent\":$LOSS_PERCENT,\"rtt\":{\"min\":$MIN_RTT,\"avg\":$RTT_AVG,\"max\":$MAX_RTT},\"ttl\":$TTL,\"jitter\":$JITTER,\"mos\":\"$MOS\",\"r_factor\":\"$R_FACTOR\"}}"
+            hook_on_status_report "$IP" "$status_json"
+          fi
         else
           # For DOWN hosts, we don't show regular report, just set metrics to N/A
           # for completeness (though we won't be using them)
@@ -841,6 +863,12 @@ run_monitors() {
   # Wait for all processes to complete
   wait
 }
+
+# Load notification hooks if available
+if [ -f "hooks.sh" ]; then
+  source hooks.sh
+  echo -e "${GREEN}Notification hooks loaded${NC}"
+fi
 
 # Run dependencies check
 check_dependencies

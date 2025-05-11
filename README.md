@@ -16,6 +16,10 @@ A powerful bash-based network monitoring tool that provides real-time statistics
 - Configurable alert thresholds for connection loss and packet loss
 - Multiple target monitoring with individual configurations
 - Clean process management with proper signal handling
+- Modular notification system:
+  - Slack integration with configurable channels and throttling
+  - Event-based notifications (host down, recovery, loss alerts)
+  - Extensible architecture for additional notification methods
 
 ## Requirements
 
@@ -253,6 +257,106 @@ Where:
 - J(i) is the current jitter estimate
 - J(i-1) is the previous jitter estimate
 - |D(i-1,i)| is the absolute difference between successive RTT values
+
+## Notification System
+
+Network Quality Monitor includes a modular notification system that can send alerts for various network events. Currently, it supports Slack notifications.
+
+### Slack Notifications
+
+You can configure the script to send alerts to Slack channels when important events occur:
+
+- **Host Down**: When a host is detected as down after consecutive lost pings
+- **Loss Alert**: When packet loss exceeds the configured threshold
+- **Recovery**: When a host recovers after being down
+
+#### Configuring Slack Notifications
+
+1. Create a Slack webhook integration in your Slack workspace
+2. Copy your webhook URL
+3. Edit `notifications/notification_config.json`:
+   ```json
+   {
+     "slack": {
+       "enabled": true,
+       "webhook_url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+       "default_channel": "#network-alerts",
+       "notifications": {
+         "host_down": {
+           "channel": "#network-alerts",
+           "throttle_minutes": 5
+         },
+         "loss_alert": {
+           "channel": "#network-warnings",
+           "throttle_minutes": 15
+         },
+         "recovery": {
+           "channel": "#network-alerts",
+           "throttle_minutes": 0
+         }
+       }
+     }
+   }
+   ```
+
+#### Configuration Fields
+
+| Field | Description |
+|---|---|
+| `enabled` | Set to `true` to enable Slack notifications |
+| `webhook_url` | Your Slack webhook URL |
+| `default_channel` | Default channel for notifications if not specified for a type |
+| `notifications.<type>.channel` | Channel for a specific notification type |
+| `notifications.<type>.throttle_minutes` | How many minutes to wait before sending another notification of the same type for the same host (0 = no throttling) |
+
+### Extending the Notification System
+
+The notification system is designed to be modular and extensible. You can add support for additional notification channels (like email, SMS, Discord, etc.) by following these steps:
+
+1. Create a new notification module in the `notifications/` directory (e.g., `notifications/discord.sh`)
+2. Implement the necessary functions for your notification channel
+3. Update the notification configuration in `notification_config.json`
+4. The new notification module will be automatically loaded if it's properly referenced in `hooks.sh`
+
+Example implementation structure for a new notification module:
+
+```bash
+#!/usr/bin/env bash
+# notifications/discord.sh - Discord notification module
+
+# Check if Discord integration is enabled
+is_discord_enabled() {
+  local enabled
+  enabled=$(jq -r '.discord.enabled // false' "$NOTIFICATION_CONFIG" 2>/dev/null)
+
+  if [ "$enabled" = "true" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Send notification to Discord
+send_discord_alert() {
+  local alert_type="$1"
+  local ip="$2"
+  local message="$3"
+
+  # Implementation details...
+}
+```
+
+Then update `hooks.sh` to load the new module:
+
+```bash
+# Load specific notification modules if they exist
+if [ -f "notifications/slack.sh" ]; then
+  source notifications/slack.sh
+fi
+if [ -f "notifications/discord.sh" ]; then
+  source notifications/discord.sh
+fi
+```
 
 ## OS Compatibility
 
