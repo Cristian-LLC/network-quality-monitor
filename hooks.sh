@@ -44,9 +44,22 @@ check_internet_connectivity() {
   # Try multiple methods to determine internet connectivity
 
   # Method 1: Try to resolve a DNS name
-  if host -W 2 google.com >/dev/null 2>&1 || host -W 2 cloudflare.com >/dev/null 2>&1; then
-    INTERNET_AVAILABLE=true
-    return 0
+  # Try using 'host' command if available, otherwise use 'dig' or 'nslookup'
+  if command -v host >/dev/null 2>&1; then
+    if host -W 2 google.com >/dev/null 2>&1 || host -W 2 cloudflare.com >/dev/null 2>&1; then
+      INTERNET_AVAILABLE=true
+      return 0
+    fi
+  elif command -v dig >/dev/null 2>&1; then
+    if dig +time=2 +tries=1 google.com >/dev/null 2>&1 || dig +time=2 +tries=1 cloudflare.com >/dev/null 2>&1; then
+      INTERNET_AVAILABLE=true
+      return 0
+    fi
+  elif command -v nslookup >/dev/null 2>&1; then
+    if nslookup google.com >/dev/null 2>&1 || nslookup cloudflare.com >/dev/null 2>&1; then
+      INTERNET_AVAILABLE=true
+      return 0
+    fi
   fi
 
   # Method 2: Try a direct ping to a reliable IP
@@ -55,9 +68,29 @@ check_internet_connectivity() {
     return 0
   fi
 
-  # Method 3: Check for a default route
-  if ip route | grep -q "^default"; then
-    # We have a default route, but still try to make an actual connection
+  # Method 3: Check for a default route (works on both macOS and Linux)
+  if command -v ip >/dev/null 2>&1; then
+    # Linux system with ip command
+    if ip route | grep -q "^default"; then
+      # We have a default route, but still try to make an actual connection
+      if curl --connect-timeout 2 -s https://www.google.com >/dev/null 2>&1 ||
+         curl --connect-timeout 2 -s https://www.cloudflare.com >/dev/null 2>&1; then
+        INTERNET_AVAILABLE=true
+        return 0
+      fi
+    fi
+  elif command -v route >/dev/null 2>&1; then
+    # macOS/BSD system with route command
+    if route -n get default >/dev/null 2>&1; then
+      # We have a default route, but still try to make an actual connection
+      if curl --connect-timeout 2 -s https://www.google.com >/dev/null 2>&1 ||
+         curl --connect-timeout 2 -s https://www.cloudflare.com >/dev/null 2>&1; then
+        INTERNET_AVAILABLE=true
+        return 0
+      fi
+    fi
+  else
+    # Last resort: just try to make a connection without checking routes
     if curl --connect-timeout 2 -s https://www.google.com >/dev/null 2>&1 ||
        curl --connect-timeout 2 -s https://www.cloudflare.com >/dev/null 2>&1; then
       INTERNET_AVAILABLE=true
