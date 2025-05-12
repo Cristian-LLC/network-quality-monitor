@@ -48,6 +48,9 @@ LOCAL_CONNECTIVITY_CHECK_SERVERS=("1.1.1.1" "8.8.8.8" "9.9.9.9") # Default serve
 LOCAL_CONNECTIVITY_CHECK_ENABLED=true # Can be disabled in config
 LAST_CONNECTIVITY_CHECK=0
 
+# Grace period after connectivity restoration (ignore all stats during this period)
+CONNECTIVITY_GRACE_PERIOD_UNTIL=0
+
 # Command line parameter processing
 show_help() {
   echo "Usage: $0 [options]"
@@ -229,13 +232,10 @@ cleanup() {
     rm -f /tmp/fping_fifo_*
   fi
 
-  # Remove connectivity reset files if they exist
+  # Remove connectivity grace period file if it exists
   if [ -f /tmp/connectivity_restored ]; then
     rm -f /tmp/connectivity_restored
   fi
-
-  # Remove all process-specific reset files
-  rm -f /tmp/reset_needed_* 2>/dev/null
 
   # Final verification to make sure all processes are properly terminated
   local remaining_fping=$(ps -o pid,command | grep "[f]ping" | grep -v grep | wc -l)
@@ -474,34 +474,48 @@ monitor_target() {
   
   # Read fping output and process the data
   while read -r line; do
-    # Check if connectivity was just restored and we need to reset counters
-    # Check more frequently when we suspect connectivity issues
-    local check_reset=true
+    # First, check for the global grace period
+    local now
+    now=$(date +%s)
 
-    # Check if global connectivity restoration file exists
+    # Update global grace period if file exists
     if [ -f "/tmp/connectivity_restored" ]; then
-      # Get the timestamp from the file
-      local global_reset_ts
-      global_reset_ts=$(cat "/tmp/connectivity_restored")
-
-      # Get current time
-      local now
-      now=$(date +%s)
-
-      # If a global reset happened in the last 15 seconds, check more frequently
-      if [ $((now - global_reset_ts)) -lt 15 ]; then
-        # Always check when there's a recent global connectivity restoration
-        check_reset=true
-      fi
+      # Read grace period end time
+      CONNECTIVITY_GRACE_PERIOD_UNTIL=$(cat "/tmp/connectivity_restored")
     fi
 
-    # Check at every iteration if we recently had connectivity issues
-    if $check_reset && check_connectivity_reset; then
-      # No reset occurred, continue normal processing
-      :
-    else
-      # Reset occurred, skip this iteration to avoid processing old data
+    # If we're in the grace period after connectivity restoration
+    if [ $now -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+      # We're in the grace period - reset all counters and ignore all data
+      if [ "$SHOW_DEBUG" = "true" ]; then
+        echo -e "${YELLOW}[$IP] In grace period - ignoring all statistics for $(($CONNECTIVITY_GRACE_PERIOD_UNTIL - $now)) more seconds${NC}"
+      fi
+
+      # Reset all statistics
+      OK_PINGS=0
+      LOST_PINGS=0
+      CONSECUTIVE_LOSS=0
+      START_TS=$now
+      MIN_RTT="9999.9"
+      MAX_RTT="0.0"
+      RECENT_RTT=()
+      JITTER="0.0"
+
+      # If network was marked as down, mark it up again
+      if ! $NETWORK_OK; then
+        NETWORK_OK=true
+        # Show recovery message
+        alert "$GREEN" "[$IP] [UP] ✅ RECOVERED: Connectivity restored during grace period"
+      fi
+
+      # Skip this iteration completely
       continue
+    fi
+
+    # If grace period just ended (within last second)
+    if [ $now -eq "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] || [ $now -eq $(($CONNECTIVITY_GRACE_PERIOD_UNTIL + 1)) ]; then
+      # Notify that grace period has ended
+      echo -e "${GREEN}[$IP] Grace period ended - resuming normal monitoring with fresh statistics${NC}"
     fi
 
     # Debug - display the line to see the format
@@ -671,10 +685,12 @@ monitor_target() {
         LAST_CONNECTIVITY_CHECK=0
         check_local_connectivity
 
-        # If we have many consecutive losses, make sure to check for resets more aggressively
-        if [ $CONSECUTIVE_LOSS -gt 5 ]; then
-          # Force a check if reset is needed
-          check_connectivity_reset
+        # If we have many consecutive losses and grace period is active, reset stats
+        if [ $CONSECUTIVE_LOSS -gt 5 ] && [ $(date +%s) -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+          # Reset statistics as we're likely recovering from connection issues
+          reset_all_statistics
+          # Skip processing this line
+          continue
         fi
 
         # Check if network is down
@@ -849,8 +865,10 @@ monitor_target() {
             hook_on_status_report "$IP" "$status_json"
           fi
 
-          # Check if we need to reset counters
-          check_connectivity_reset
+          # Check if we're in the grace period and need to reset statistics
+          if [ $(date +%s) -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+            reset_all_statistics
+          fi
         else
           # For DOWN hosts, we don't show regular report, just set metrics to N/A
           # for completeness (though we won't be using them)
@@ -884,62 +902,27 @@ monitor_target() {
 
 # Helper function to check if connectivity was just restored
 # and reset counters if needed
-check_connectivity_reset() {
-  # Process-specific reset file
-  local process_reset_file="/tmp/reset_needed_$BASHPID"
+# Helper function to reset all statistics - used during grace period
+reset_all_statistics() {
+  # Reset all counters
+  OK_PINGS=0
+  LOST_PINGS=0
+  CONSECUTIVE_LOSS=0
+  START_TS=$(date +%s)
 
-  # Check both the global and process-specific reset files
-  local reset_needed=false
+  # Reset min/max RTT values
+  MIN_RTT="9999.9"
+  MAX_RTT="0.0"
+  RECENT_RTT=()
+  JITTER="0.0"
 
-  # Check process-specific reset file
-  if [ -f "$process_reset_file" ]; then
-    # Get the timestamp from the file
-    local reset_ts
-    reset_ts=$(cat "$process_reset_file")
-
-    # Get current time
-    local now
-    now=$(date +%s)
-
-    # If file exists and reset is recent (within last 10 seconds)
-    if [ $((now - reset_ts)) -lt 10 ]; then
-      reset_needed=true
-      # Remove reset marker to prevent multiple resets
-      rm -f "$process_reset_file"
-    fi
+  # If network was marked as down, mark it up again
+  if ! $NETWORK_OK; then
+    NETWORK_OK=true
+    return 1  # Indicate network state changed
   fi
 
-  # If reset is needed
-  if $reset_needed; then
-    # Always show reset message (important enough for user to see)
-    echo -e "${YELLOW}[$IP] Resetting counters after connectivity restoration${NC}"
-
-    # Reset counters
-    OK_PINGS=0
-    LOST_PINGS=0
-    CONSECUTIVE_LOSS=0
-    START_TS=$(date +%s)
-
-    # Reset min/max RTT values
-    MIN_RTT="9999.9"
-    MAX_RTT="0.0"
-    RECENT_RTT=()
-    JITTER="0.0"
-
-    # If network was marked as down, mark it up again
-    if ! $NETWORK_OK; then
-      NETWORK_OK=true
-      # Show recovery message
-      alert "$GREEN" "[$IP] [UP] ✅ RECOVERED: Connectivity restored"
-    fi
-
-    # Show reset alert - important event
-    alert "$GREEN" "[$IP] Statistics reset after connectivity restoration"
-
-    return 1  # Return 1 to indicate reset occurred
-  fi
-
-  return 0  # Return 0 to indicate no reset
+  return 0  # Indicate just counters reset
 }
 
 # Function to check if local machine has internet connectivity
@@ -1126,20 +1109,14 @@ check_local_connectivity() {
         echo "Local connectivity restored!"
       fi
       # Print a notice when connectivity is restored
-      echo -e "${GREEN}⚡ Local connectivity has been restored! Normal alerts will now be shown.${NC}"
+      echo -e "${GREEN}⚡ Local connectivity has been restored! Starting 30 second grace period...${NC}"
 
-      # Signal all monitor processes to reset their counters
-      # Mark the connectivity as restored
-      echo "$(date +%s)" > /tmp/connectivity_restored
+      # Set a 30 second grace period - no alerts during this time
+      # Calculate timestamp 30 seconds from now
+      CONNECTIVITY_GRACE_PERIOD_UNTIL=$(($(date +%s) + 30))
 
-      # Loop through all monitor PIDs and mark them for reset
-      for pid in "${MONITOR_PIDS[@]}"; do
-        # Mark this process for reset by updating its reset file
-        echo "$(date +%s)" > "/tmp/reset_needed_$pid"
-        if [ "$SHOW_DEBUG" = "true" ]; then
-          echo "Marking process $pid for statistics reset"
-        fi
-      done
+      # Save grace period end time to a file for all processes to read
+      echo "$CONNECTIVITY_GRACE_PERIOD_UNTIL" > /tmp/connectivity_restored
 
       # Process queued alerts now that we have connectivity
       if type process_alert_queue &>/dev/null; then
