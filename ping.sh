@@ -566,8 +566,28 @@ monitor_target() {
           # Remove sequence numbers, brackets and clean up the message
           error_part=$(echo "$error_part" | sed 's/\[[0-9]*\],\s*//' | sed 's/([^)]*)//g' | sed 's/\.$//g' | sed 's/from.*//g' | xargs)
 
-          # Capitalize first letter for consistency
-          error_part=$(echo "$error_part" | sed 's/^\([a-z]\)/\U\1/')
+          # Handle specific error messages for clarity and consistency
+          case "$error_part" in
+            *[Tt]"imed out"*)
+              error_part="Timed out"
+              ;;
+            *"Network is unreachable"*)
+              error_part="Network is unreachable"
+              ;;
+            *"No route to host"*)
+              error_part="No route to host"
+              ;;
+            *"Host unreachable"*|*"host unreachable"*)
+              error_part="Host unreachable"
+              ;;
+            *"unreachable"*)
+              error_part="Host unreachable"
+              ;;
+            *)
+              # For any other message, capitalize first letter for consistency
+              error_part=$(echo "$error_part" | sed 's/^\([a-z]\)/\U\1/')
+              ;;
+          esac
 
           if [ -n "$error_part" ]; then
             failure_reason="$error_part"
