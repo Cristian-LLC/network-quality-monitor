@@ -555,14 +555,50 @@ monitor_target() {
         LOST_PINGS=$((LOST_PINGS + 1))
         CONSECUTIVE_LOSS=$((CONSECUTIVE_LOSS + 1))
 
+        # Extract the failure reason directly from the line
+        local failure_reason="Unknown reason"
+
+        # Try to extract the exact error message
+        if [[ "$line" =~ :[[:space:]]*(.*) ]]; then
+          # This will capture everything after the colon and space
+          local error_part="${BASH_REMATCH[1]}"
+
+          # Remove any trailing punctuation or excess info
+          error_part=$(echo "$error_part" | sed 's/([^)]*)//g' | sed 's/\.$//g' | sed 's/from.*//g' | xargs)
+
+          if [ -n "$error_part" ]; then
+            failure_reason="$error_part"
+          fi
+        else
+          # Fallback categorization if regex extraction fails
+          if [[ "$line" == *"unreachable"* ]]; then
+            failure_reason="Host unreachable"
+          elif [[ "$line" == *"timeout"* || "$line" == *"timed out"* ]]; then
+            failure_reason="Timeout"
+          elif [[ "$line" == *"Network unreachable"* ]]; then
+            failure_reason="Network unreachable"
+          elif [[ "$line" == *"No route to host"* ]]; then
+            failure_reason="No route to host"
+          elif [[ "$line" == *"Network is down"* ]]; then
+            failure_reason="Network is down"
+          elif [[ "$line" == *"Destination host unreachable"* || "$line" == *"ICMP Host Unreachable"* ]]; then
+            failure_reason="ICMP Host Unreachable"
+          fi
+        fi
+
+        # For debug
+        if [ "$SHOW_DEBUG" = "true" ]; then
+          echo "Debug - Parsed error: '$failure_reason' from line: '$line'"
+        fi
+
         # Check if network is down
         if "$NETWORK_OK" && [ $CONSECUTIVE_LOSS -ge "$MAX_CONSECUTIVE_LOSS" ]; then
-          alert "$RED" "[$IP] [DOWN] 🛑 ${CONSECUTIVE_LOSS} consecutive losses!"
+          alert "$RED" "[$IP] [DOWN] 🛑 ${CONSECUTIVE_LOSS} consecutive losses! Reason: $failure_reason"
           NETWORK_OK=false
 
           # Call hook if available
           if type hook_on_host_down &>/dev/null; then
-            hook_on_host_down "$IP" "$CONSECUTIVE_LOSS"
+            hook_on_host_down "$IP" "$CONSECUTIVE_LOSS" "$failure_reason"
           fi
         fi
       fi

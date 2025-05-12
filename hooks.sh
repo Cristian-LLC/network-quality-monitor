@@ -124,10 +124,12 @@ process_alert_queue() {
 # Called when a host is detected as DOWN
 # $1: IP address or hostname
 # $2: Number of consecutive losses
+# $3: Failure reason (optional)
 hook_on_host_down() {
   local ip="$1"
   local consecutive_losses="$2"
-  local message="Host $ip is DOWN after $consecutive_losses consecutive losses."
+  local failure_reason="${3:-Unknown reason}"
+  local message="Host $ip is DOWN after $consecutive_losses consecutive losses. Reason: $failure_reason"
 
   # Call Slack notification if available and enabled
   if type send_slack_alert &>/dev/null && is_slack_enabled; then
