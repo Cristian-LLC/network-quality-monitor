@@ -569,12 +569,8 @@ monitor_target() {
           # Handle specific error messages for clarity and consistency
           case "$error_part" in
             *[Tt]"imed out"*|*"100% loss"*)
-              # WiFi disabled or no connectivity
-              if [[ "$line" == *"is unreachable"* ]]; then
-                error_part="No network connectivity"
-              else
-                error_part="Timed out"
-              fi
+              # When WiFi is off, we use a clearer message
+              error_part="Network connectivity lost"
               ;;
             *"Network is unreachable"*|*"network is unreachable"*)
               error_part="Network is unreachable"
@@ -597,11 +593,11 @@ monitor_target() {
         else
           # Fallback categorization if regex extraction fails
           if [[ "$line" == *"is unreachable"* ]]; then
-            failure_reason="No network connectivity"
+            failure_reason="Network connectivity lost"
           elif [[ "$line" == *"unreachable"* ]]; then
             failure_reason="Host unreachable"
-          elif [[ "$line" == *"timeout"* || "$line" == *"timed out"* ]]; then
-            failure_reason="Timed out"
+          elif [[ "$line" == *"timeout"* || "$line" == *"timed out"* || "$line" == *"100% loss"* ]]; then
+            failure_reason="Network connectivity lost"
           elif [[ "$line" == *"Network unreachable"* || "$line" == *"network is unreachable"* ]]; then
             failure_reason="Network is unreachable"
           elif [[ "$line" == *"No route to host"* || "$line" == *"no route to host"* ]]; then
@@ -610,8 +606,6 @@ monitor_target() {
             failure_reason="Network is down"
           elif [[ "$line" == *"Destination host unreachable"* || "$line" == *"ICMP Host Unreachable"* ]]; then
             failure_reason="ICMP Host Unreachable"
-          elif [[ "$line" == *"100% loss"* ]]; then
-            failure_reason="Timed out"
           fi
         fi
 
