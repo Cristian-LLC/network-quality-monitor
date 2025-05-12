@@ -481,7 +481,20 @@ monitor_target() {
     # Update global grace period if file exists
     if [ -f "/tmp/connectivity_restored" ]; then
       # Read grace period end time
-      CONNECTIVITY_GRACE_PERIOD_UNTIL=$(cat "/tmp/connectivity_restored")
+      local file_grace_period
+      file_grace_period=$(cat "/tmp/connectivity_restored")
+
+      # Only update if the file has a more recent timestamp than our current setting
+      if [ "$file_grace_period" -gt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+        CONNECTIVITY_GRACE_PERIOD_UNTIL="$file_grace_period"
+        # Show message when entering grace period
+        echo -e "${YELLOW}[$IP] Entering grace period - stats will reset${NC}"
+        # Reset network status to up immediately
+        if ! $NETWORK_OK; then
+          NETWORK_OK=true
+          alert "$GREEN" "[$IP] [UP] ✅ RECOVERED: Connectivity restored during grace period"
+        fi
+      fi
     fi
 
     # If we're in the grace period after connectivity restoration
@@ -512,10 +525,25 @@ monitor_target() {
       continue
     fi
 
-    # If grace period just ended (within last second)
-    if [ $now -eq "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] || [ $now -eq $(($CONNECTIVITY_GRACE_PERIOD_UNTIL + 1)) ]; then
+    # Check if grace period just ended (within last second)
+    # Note: Use <= not == to handle case where we miss the exact second
+    if [ $now -ge "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] && [ $now -le $(($CONNECTIVITY_GRACE_PERIOD_UNTIL + 2)) ]; then
       # Notify that grace period has ended
       echo -e "${GREEN}[$IP] Grace period ended - resuming normal monitoring with fresh statistics${NC}"
+
+      # Force a reset of stats at the end of grace period
+      OK_PINGS=0
+      LOST_PINGS=0
+      CONSECUTIVE_LOSS=0
+      START_TS=$now
+      MIN_RTT="9999.9"
+      MAX_RTT="0.0"
+      RECENT_RTT=()
+      JITTER="0.0"
+
+      # Clear grace period to avoid multiple messages
+      # By setting it to 1, we ensure it's in the past
+      CONNECTIVITY_GRACE_PERIOD_UNTIL=1
     fi
 
     # Debug - display the line to see the format
@@ -716,7 +744,8 @@ monitor_target() {
       fi
       
       # Check if we need to display the report
-      if (( NOW_TS - START_TS >= "$REPORT_INTERVAL" )); then
+      # Skip report if current time is within the grace period
+      if (( NOW_TS - START_TS >= "$REPORT_INTERVAL" )) && [ $NOW_TS -gt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
         TOTAL_PINGS=$((OK_PINGS + LOST_PINGS))
 
         if [ $TOTAL_PINGS -gt 0 ]; then
