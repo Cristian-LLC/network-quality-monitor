@@ -41,6 +41,11 @@ set -e
 TARGET_FILE="targets.json"
 SHOW_DEBUG="false"
 
+# Global state for local connectivity checking
+LOCAL_CONNECTIVITY=true
+LOCAL_CONNECTIVITY_CHECK_INTERVAL=30  # seconds
+LAST_CONNECTIVITY_CHECK=0
+
 # Command line parameter processing
 show_help() {
   echo "Usage: $0 [options]"
@@ -618,14 +623,25 @@ monitor_target() {
           echo "Debug - Parsed error: '$failure_reason' from line: '$line'"
         fi
 
+        # Run a connectivity check periodically
+        check_local_connectivity
+
         # Check if network is down
         if "$NETWORK_OK" && [ $CONSECUTIVE_LOSS -ge "$MAX_CONSECUTIVE_LOSS" ]; then
-          alert "$RED" "[$IP] [DOWN] 🛑 ${CONSECUTIVE_LOSS} consecutive losses! Reason: $failure_reason"
-          NETWORK_OK=false
+          # When local connectivity is lost, mark differently to indicate possible false alarm
+          if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
+            # Show warning but don't send notifications when local connectivity is lost
+            alert "$YELLOW" "[$IP] [DOWN?] ⚠️ ${CONSECUTIVE_LOSS} consecutive losses! (Local connectivity lost, possible false alarm)"
+            NETWORK_OK=false
+          else
+            # Normal alert when we have local connectivity
+            alert "$RED" "[$IP] [DOWN] 🛑 ${CONSECUTIVE_LOSS} consecutive losses! Reason: $failure_reason"
+            NETWORK_OK=false
 
-          # Call hook if available
-          if type hook_on_host_down &>/dev/null; then
-            hook_on_host_down "$IP" "$CONSECUTIVE_LOSS" "$failure_reason"
+            # Call hook if available
+            if type hook_on_host_down &>/dev/null; then
+              hook_on_host_down "$IP" "$CONSECUTIVE_LOSS" "$failure_reason"
+            fi
           fi
         fi
       fi
@@ -648,11 +664,21 @@ monitor_target() {
           # Only show loss alert if network is UP
           # This prevents showing loss alerts for hosts we already know are down
           if $NETWORK_OK; then
-            alert "$RED" "[$IP] 📉 [LOSS ALERT] Excessive packet loss in the last ${REPORT_INTERVAL} seconds: ${LOSS_PERCENT}%"
+            # Run a connectivity check before alerting
+            check_local_connectivity
 
-            # Call hook if available
-            if type hook_on_loss_alert &>/dev/null; then
-              hook_on_loss_alert "$IP" "${LOSS_PERCENT}" "${REPORT_INTERVAL}"
+            # If local connectivity is lost, suppress or mark differently
+            if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
+              # Show warning but don't send notifications when local connectivity is lost
+              alert "$YELLOW" "[$IP] 📉 [LOSS ALERT?] Excessive packet loss: ${LOSS_PERCENT}% (Local connectivity lost, possible false alarm)"
+            else
+              # Normal alert when we have local connectivity
+              alert "$RED" "[$IP] 📉 [LOSS ALERT] Excessive packet loss in the last ${REPORT_INTERVAL} seconds: ${LOSS_PERCENT}%"
+
+              # Call hook if available
+              if type hook_on_loss_alert &>/dev/null; then
+                hook_on_loss_alert "$IP" "${LOSS_PERCENT}" "${REPORT_INTERVAL}"
+              fi
             fi
           fi
         elif (( $(echo "$LOSS_PERCENT > 0" | bc -l) )); then
@@ -786,6 +812,43 @@ monitor_target() {
   
   # Clean up the fifo at the end
   rm -f "$FIFO"
+}
+
+# Function to check if local machine has internet connectivity
+# This is used to prevent false-positive alerts when the monitoring machine loses internet
+# Returns: Sets LOCAL_CONNECTIVITY to true or false
+check_local_connectivity() {
+  local now
+  now=$(date +%s)
+
+  # Only check at the specified interval to avoid excessive checks
+  if [ $((now - LAST_CONNECTIVITY_CHECK)) -lt $LOCAL_CONNECTIVITY_CHECK_INTERVAL ]; then
+    return 0
+  fi
+
+  LAST_CONNECTIVITY_CHECK=$now
+
+  if [ "$SHOW_DEBUG" = "true" ]; then
+    echo "Checking local connectivity..."
+  fi
+
+  # Check if we can reach reliable public DNS servers
+  # We try multiple servers to avoid false readings
+  if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1 ||
+     ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 ||
+     ping -c 1 -W 2 9.9.9.9 >/dev/null 2>&1; then
+    # We have connectivity
+    if [ "$LOCAL_CONNECTIVITY" = "false" ] && [ "$SHOW_DEBUG" = "true" ]; then
+      echo "Local connectivity restored!"
+    fi
+    LOCAL_CONNECTIVITY=true
+  else
+    # We don't have connectivity
+    if [ "$LOCAL_CONNECTIVITY" = "true" ] && [ "$SHOW_DEBUG" = "true" ]; then
+      echo "Local connectivity lost!"
+    fi
+    LOCAL_CONNECTIVITY=false
+  fi
 }
 
 # Check required dependencies for script execution
@@ -939,11 +1002,17 @@ fi
 # Run dependencies check
 check_dependencies
 
+# Initial connectivity check before starting
+check_local_connectivity
+
 # Display a banner and instructions at the beginning
 echo -e "${CYAN}==========================================================${NC}"
 echo -e "${GREEN}Network Quality Monitor v1.2.0 - Starting monitoring processes${NC}"
 echo -e "${CYAN}==========================================================${NC}"
 echo -e "Press ${GREEN}Ctrl+C${NC} to stop all monitoring processes and exit."
+if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
+  echo -e "${YELLOW}Warning: No local connectivity detected. Alerts will be suppressed.${NC}"
+fi
 echo -e "${CYAN}==========================================================${NC}"
 
 # Start monitoring
