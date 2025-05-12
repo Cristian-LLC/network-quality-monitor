@@ -19,6 +19,7 @@ A powerful bash-based network monitoring tool that provides real-time statistics
 - Slack notification system:
   - Configurable channels for different alert types
   - Event-based notifications (host down, recovery, loss alerts)
+  - Offline alert queueing with automatic delivery when connectivity returns
 
 ## Requirements
 
@@ -226,6 +227,16 @@ Each target in the configuration has the following fields:
 - `[DOWN]`: Triggered when consecutive packet losses exceed the configured threshold
 - `[LOSS ALERT]`: Triggered when packet loss percentage exceeds the configured threshold
 - `[UP]`: Displayed when a previously down connection recovers
+
+## Offline Alert Handling
+
+Network Quality Monitor includes a robust system for handling alerts during network outages:
+
+- Alerts are automatically queued when internet connectivity is unavailable
+- Multiple connectivity detection methods ensure accurate connectivity assessment
+- Queued alerts are delivered automatically when connectivity is restored
+- Queued alerts older than 24 hours are automatically cleaned up
+- All delayed alerts include an indication that they were delivered after the original event
 
 ## Technical Implementation Details
 

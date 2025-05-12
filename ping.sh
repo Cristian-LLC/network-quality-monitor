@@ -547,7 +547,10 @@ monitor_target() {
             hook_on_host_recovery "$IP" "${TIME_MS}"
           fi
         fi
-      elif [[ "$line" == *"unreachable"* || "$line" == *"timeout"* || "$line" == *"timed out"* ]]; then
+      elif [[ "$line" == *"unreachable"* || "$line" == *"timeout"* || "$line" == *"timed out"* ||
+              "$line" == *"Network unreachable"* || "$line" == *"No route to host"* ||
+              "$line" == *"Network is down"* || "$line" == *"Host unreachable"* ||
+              "$line" == *"Destination host unreachable"* || "$line" == *"ICMP Host Unreachable"* ]]; then
         # Failed ping
         LOST_PINGS=$((LOST_PINGS + 1))
         CONSECUTIVE_LOSS=$((CONSECUTIVE_LOSS + 1))
