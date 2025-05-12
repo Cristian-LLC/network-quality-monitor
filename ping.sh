@@ -221,12 +221,17 @@ cleanup() {
   # Terminate any residual processes that may belong to this script
   pkill -P "$BASHPID" 2>/dev/null
 
-  # Clean up temporary files (named pipes)
+  # Clean up temporary files (named pipes and signal files)
   local num_fifos
   num_fifos=$(ls -1 /tmp/fping_fifo_* 2>/dev/null | wc -l)
   if [ "$num_fifos" -gt 0 ]; then
     echo -e "${CYAN}Cleaning up $num_fifos temporary files...${NC}"
     rm -f /tmp/fping_fifo_*
+  fi
+
+  # Remove connectivity reset file if it exists
+  if [ -f /tmp/connectivity_restored ]; then
+    rm -f /tmp/connectivity_restored
   fi
 
   # Final verification to make sure all processes are properly terminated
@@ -463,6 +468,15 @@ monitor_target() {
   
   # Read fping output and process the data
   while read -r line; do
+    # Check if connectivity was just restored and we need to reset counters
+    if check_connectivity_reset; then
+      # No reset occurred, continue normal processing
+      :
+    else
+      # Reset occurred, skip this iteration to avoid processing old data
+      continue
+    fi
+
     # Debug - display the line to see the format
     if [ "$SHOW_DEBUG" = "true" ]; then
       echo "Debug: $line"
@@ -832,6 +846,53 @@ monitor_target() {
   rm -f "$FIFO"
 }
 
+# Helper function to check if connectivity was just restored
+# and reset counters if needed
+check_connectivity_reset() {
+  local reset_file="/tmp/connectivity_restored"
+
+  # If reset file doesn't exist, no action needed
+  if [ ! -f "$reset_file" ]; then
+    return 0
+  fi
+
+  # Get the timestamp from the file
+  local reset_ts
+  reset_ts=$(cat "$reset_file")
+
+  # Get current time
+  local now
+  now=$(date +%s)
+
+  # If reset happened within the last 3 seconds, reset counters
+  if [ $((now - reset_ts)) -lt 3 ]; then
+    if [ "$SHOW_DEBUG" = "true" ]; then
+      echo -e "${YELLOW}[$IP] Resetting counters after connectivity restoration${NC}"
+    fi
+
+    # Reset counters
+    OK_PINGS=0
+    LOST_PINGS=0
+    CONSECUTIVE_LOSS=0
+    START_TS=$now
+
+    # Reset min/max RTT values
+    MIN_RTT="9999.9"
+    MAX_RTT="0.0"
+    RECENT_RTT=()
+    JITTER="0.0"
+
+    # If network was marked as down, mark it up again
+    if ! $NETWORK_OK; then
+      NETWORK_OK=true
+    fi
+
+    return 1  # Return 1 to indicate reset occurred
+  fi
+
+  return 0  # Return 0 to indicate no reset
+}
+
 # Function to check if local machine has internet connectivity
 # This is used to prevent false-positive alerts when the monitoring machine loses internet
 # Returns: Sets LOCAL_CONNECTIVITY to true or false
@@ -1017,7 +1078,11 @@ check_local_connectivity() {
       fi
       # Print a notice when connectivity is restored
       echo -e "${GREEN}⚡ Local connectivity has been restored! Normal alerts will now be shown.${NC}"
-      
+
+      # Signal all monitor processes to reset their counters
+      # by updating a global flag and writing to a temp file
+      echo "$(date +%s)" > /tmp/connectivity_restored
+
       # Process queued alerts now that we have connectivity
       if type process_alert_queue &>/dev/null; then
         process_alert_queue
