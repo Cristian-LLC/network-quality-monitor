@@ -50,6 +50,8 @@ LAST_CONNECTIVITY_CHECK=0
 
 # Grace period after connectivity restoration (ignore all stats during this period)
 CONNECTIVITY_GRACE_PERIOD_UNTIL=0
+GRACE_PERIOD_NOTICE_SHOWN=false       # Flag to track if we've shown a notice about entering grace period
+GRACE_END_NOTICE_SHOWN=false          # Flag to track if we've shown a notice about exiting grace period
 
 # Command line parameter processing
 show_help() {
@@ -487,8 +489,11 @@ monitor_target() {
       # Only update if the file has a more recent timestamp than our current setting
       if [ "$file_grace_period" -gt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
         CONNECTIVITY_GRACE_PERIOD_UNTIL="$file_grace_period"
-        # Show message when entering grace period
-        echo -e "${YELLOW}[$IP] Entering grace period - stats will reset${NC}"
+          # Only 1.1.1.1 is allowed to show the entering message
+        if [ "$IP" = "1.1.1.1" ] && ! $GRACE_PERIOD_NOTICE_SHOWN; then
+          echo -e "${YELLOW}Entering grace period - monitoring statistics will be reset${NC}"
+          GRACE_PERIOD_NOTICE_SHOWN=true
+        fi
         # Reset network status to up immediately
         if ! $NETWORK_OK; then
           NETWORK_OK=true
@@ -500,8 +505,11 @@ monitor_target() {
     # If we're in the grace period after connectivity restoration
     if [ $now -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
       # We're in the grace period - reset all counters and ignore all data
-      if [ "$SHOW_DEBUG" = "true" ]; then
-        echo -e "${YELLOW}[$IP] In grace period - ignoring all statistics for $(($CONNECTIVITY_GRACE_PERIOD_UNTIL - $now)) more seconds${NC}"
+      if [ "$SHOW_DEBUG" = "true" ] && [ "$IP" = "1.1.1.1" ]; then
+        local seconds_left=$(($CONNECTIVITY_GRACE_PERIOD_UNTIL - $now))
+        if [ $((seconds_left % 5)) -eq 0 ]; then  # Only show every 5 seconds
+          echo -e "${YELLOW}In grace period - $(($CONNECTIVITY_GRACE_PERIOD_UNTIL - $now)) seconds remaining${NC}"
+        fi
       fi
 
       # Reset all statistics
@@ -525,11 +533,16 @@ monitor_target() {
       continue
     fi
 
-    # Check if grace period just ended (within last second)
-    # Note: Use <= not == to handle case where we miss the exact second
-    if [ $now -ge "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] && [ $now -le $(($CONNECTIVITY_GRACE_PERIOD_UNTIL + 2)) ]; then
-      # Notify that grace period has ended
-      echo -e "${GREEN}[$IP] Grace period ended - resuming normal monitoring with fresh statistics${NC}"
+    # Check if grace period just ended (within last 5 seconds)
+    # Note: Use a wider window to catch the transition
+    if [ $now -ge "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] && [ $now -le $(($CONNECTIVITY_GRACE_PERIOD_UNTIL + 5)) ]; then
+      # Only show this message once across all processes
+      # Only 1.1.1.1 is allowed to show the message
+      if [ "$IP" = "1.1.1.1" ] && ! $GRACE_END_NOTICE_SHOWN; then
+        # Notify that grace period has ended
+        echo -e "${GREEN}✓ Grace period ended - resuming normal monitoring with fresh statistics${NC}"
+        GRACE_END_NOTICE_SHOWN=true
+      fi
 
       # Force a reset of stats at the end of grace period
       OK_PINGS=0
@@ -1137,8 +1150,13 @@ check_local_connectivity() {
       if [ "$SHOW_DEBUG" = "true" ]; then
         echo "Local connectivity restored!"
       fi
-      # Print a notice when connectivity is restored
-      echo -e "${GREEN}⚡ Local connectivity has been restored! Starting 30 second grace period...${NC}"
+      # Print a notice when connectivity is restored (only once)
+      if ! $GRACE_PERIOD_NOTICE_SHOWN; then
+        echo -e "${GREEN}⚡ Local connectivity has been restored! Starting 30 second grace period...${NC}"
+        GRACE_PERIOD_NOTICE_SHOWN=true
+        # Also reset the end notice flag
+        GRACE_END_NOTICE_SHOWN=false
+      fi
 
       # Set a 30 second grace period - no alerts during this time
       # Calculate timestamp 30 seconds from now
@@ -1161,6 +1179,10 @@ check_local_connectivity() {
       fi
       # Print a notice when connectivity is lost
       echo -e "${YELLOW}⚠️ Local connectivity has been lost! Alerts will be suppressed until connectivity is restored.${NC}"
+
+      # Reset the grace period notification flags
+      GRACE_PERIOD_NOTICE_SHOWN=false
+      GRACE_END_NOTICE_SHOWN=false
     fi
     LOCAL_CONNECTIVITY=false
   fi
