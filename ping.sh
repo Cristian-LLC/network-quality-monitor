@@ -568,19 +568,21 @@ monitor_target() {
 
           # Handle specific error messages for clarity and consistency
           case "$error_part" in
-            *[Tt]"imed out"*)
-              error_part="Timed out"
+            *[Tt]"imed out"*|*"100% loss"*)
+              # WiFi disabled or no connectivity
+              if [[ "$line" == *"is unreachable"* ]]; then
+                error_part="No network connectivity"
+              else
+                error_part="Timed out"
+              fi
               ;;
-            *"Network is unreachable"*)
+            *"Network is unreachable"*|*"network is unreachable"*)
               error_part="Network is unreachable"
               ;;
-            *"No route to host"*)
+            *"No route to host"*|*"no route to host"*)
               error_part="No route to host"
               ;;
-            *"Host unreachable"*|*"host unreachable"*)
-              error_part="Host unreachable"
-              ;;
-            *"unreachable"*)
+            *[Uu]"nreachable"*)
               error_part="Host unreachable"
               ;;
             *)
@@ -594,18 +596,22 @@ monitor_target() {
           fi
         else
           # Fallback categorization if regex extraction fails
-          if [[ "$line" == *"unreachable"* ]]; then
+          if [[ "$line" == *"is unreachable"* ]]; then
+            failure_reason="No network connectivity"
+          elif [[ "$line" == *"unreachable"* ]]; then
             failure_reason="Host unreachable"
           elif [[ "$line" == *"timeout"* || "$line" == *"timed out"* ]]; then
             failure_reason="Timed out"
-          elif [[ "$line" == *"Network unreachable"* ]]; then
-            failure_reason="Network unreachable"
-          elif [[ "$line" == *"No route to host"* ]]; then
+          elif [[ "$line" == *"Network unreachable"* || "$line" == *"network is unreachable"* ]]; then
+            failure_reason="Network is unreachable"
+          elif [[ "$line" == *"No route to host"* || "$line" == *"no route to host"* ]]; then
             failure_reason="No route to host"
-          elif [[ "$line" == *"Network is down"* ]]; then
+          elif [[ "$line" == *"Network is down"* || "$line" == *"network is down"* ]]; then
             failure_reason="Network is down"
           elif [[ "$line" == *"Destination host unreachable"* || "$line" == *"ICMP Host Unreachable"* ]]; then
             failure_reason="ICMP Host Unreachable"
+          elif [[ "$line" == *"100% loss"* ]]; then
+            failure_reason="Timed out"
           fi
         fi
 
