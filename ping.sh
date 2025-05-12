@@ -44,6 +44,8 @@ SHOW_DEBUG="false"
 # Global state for local connectivity checking
 LOCAL_CONNECTIVITY=true
 LOCAL_CONNECTIVITY_CHECK_INTERVAL=30  # seconds
+LOCAL_CONNECTIVITY_CHECK_SERVERS=("1.1.1.1" "8.8.8.8" "9.9.9.9") # Default servers
+LOCAL_CONNECTIVITY_CHECK_ENABLED=true # Can be disabled in config
 LAST_CONNECTIVITY_CHECK=0
 
 # Command line parameter processing
@@ -818,6 +820,12 @@ monitor_target() {
 # This is used to prevent false-positive alerts when the monitoring machine loses internet
 # Returns: Sets LOCAL_CONNECTIVITY to true or false
 check_local_connectivity() {
+  # If connectivity checking is disabled, always return true
+  if [ "$LOCAL_CONNECTIVITY_CHECK_ENABLED" = "false" ]; then
+    LOCAL_CONNECTIVITY=true
+    return 0
+  fi
+
   local now
   now=$(date +%s)
 
@@ -829,14 +837,21 @@ check_local_connectivity() {
   LAST_CONNECTIVITY_CHECK=$now
 
   if [ "$SHOW_DEBUG" = "true" ]; then
-    echo "Checking local connectivity..."
+    echo "Checking local connectivity using: ${LOCAL_CONNECTIVITY_CHECK_SERVERS[*]}"
   fi
 
-  # Check if we can reach reliable public DNS servers
-  # We try multiple servers to avoid false readings
-  if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1 ||
-     ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 ||
-     ping -c 1 -W 2 9.9.9.9 >/dev/null 2>&1; then
+  # Variable to track if any server is reachable
+  local any_reachable=false
+
+  # Check if we can reach any of the configured servers
+  for server in "${LOCAL_CONNECTIVITY_CHECK_SERVERS[@]}"; do
+    if ping -c 1 -W 2 "$server" >/dev/null 2>&1; then
+      any_reachable=true
+      break
+    fi
+  done
+
+  if $any_reachable; then
     # We have connectivity
     if [ "$LOCAL_CONNECTIVITY" = "false" ] && [ "$SHOW_DEBUG" = "true" ]; then
       echo "Local connectivity restored!"
@@ -845,7 +860,7 @@ check_local_connectivity() {
   else
     # We don't have connectivity
     if [ "$LOCAL_CONNECTIVITY" = "true" ] && [ "$SHOW_DEBUG" = "true" ]; then
-      echo "Local connectivity lost!"
+      echo "Local connectivity lost! Cannot reach any of: ${LOCAL_CONNECTIVITY_CHECK_SERVERS[*]}"
     fi
     LOCAL_CONNECTIVITY=false
   fi
@@ -956,7 +971,7 @@ run_monitors() {
 
     # Use a short sleep to allow the process to start
     sleep 0.5
-  done < <(jq -c '.[]' "$TARGET_FILE")
+  done < <(jq -c '.targets[]' "$TARGET_FILE")
 
   # Show process information if we have started processes
   if [ ${#MONITOR_PIDS[@]} -gt 0 ]; then
@@ -1001,6 +1016,26 @@ fi
 
 # Run dependencies check
 check_dependencies
+
+# Read connectivity check configuration from JSON
+if jq -e '.config.connectivity_check' "$TARGET_FILE" > /dev/null 2>&1; then
+  # Configuration exists, read it
+  LOCAL_CONNECTIVITY_CHECK_ENABLED=$(jq -r '.config.connectivity_check.enabled // true' "$TARGET_FILE")
+  LOCAL_CONNECTIVITY_CHECK_INTERVAL=$(jq -r '.config.connectivity_check.check_interval // 30' "$TARGET_FILE")
+
+  # Read server array if available
+  if jq -e '.config.connectivity_check.servers' "$TARGET_FILE" > /dev/null 2>&1; then
+    # Convert JSON array to bash array
+    mapfile -t LOCAL_CONNECTIVITY_CHECK_SERVERS < <(jq -r '.config.connectivity_check.servers[]' "$TARGET_FILE")
+  fi
+fi
+
+if [ "$SHOW_DEBUG" = "true" ]; then
+  echo "Connectivity check configuration:"
+  echo "  Enabled: $LOCAL_CONNECTIVITY_CHECK_ENABLED"
+  echo "  Interval: $LOCAL_CONNECTIVITY_CHECK_INTERVAL seconds"
+  echo "  Servers: ${LOCAL_CONNECTIVITY_CHECK_SERVERS[*]}"
+fi
 
 # Initial connectivity check before starting
 check_local_connectivity
