@@ -632,10 +632,12 @@ monitor_target() {
 
         # Check if network is down
         if "$NETWORK_OK" && [ $CONSECUTIVE_LOSS -ge "$MAX_CONSECUTIVE_LOSS" ]; then
-          # When local connectivity is lost, mark differently to indicate possible false alarm
+          # When local connectivity is lost, suppress or mark differently
           if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
-            # Show warning but don't send notifications when local connectivity is lost
-            alert "$YELLOW" "[$IP] [DOWN?] ⚠️ ${CONSECUTIVE_LOSS} consecutive losses! (Local connectivity lost, possible false alarm)"
+            # Show warning only in debug mode but don't send notifications when local connectivity is lost
+            if [ "$SHOW_DEBUG" = "true" ]; then
+              alert "$YELLOW" "[$IP] [DOWN?] ⚠️ ${CONSECUTIVE_LOSS} consecutive losses! (Local connectivity lost, possible false alarm)"
+            fi
             NETWORK_OK=false
           else
             # Normal alert when we have local connectivity
@@ -672,10 +674,12 @@ monitor_target() {
             LAST_CONNECTIVITY_CHECK=0
             check_local_connectivity
 
-            # If local connectivity is lost, suppress or mark differently
+            # If local connectivity is lost, suppress completely or mark differently
             if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
-              # Show warning but don't send notifications when local connectivity is lost
-              alert "$YELLOW" "[$IP] 📉 [LOSS ALERT?] Excessive packet loss: ${LOSS_PERCENT}% (Local connectivity lost, possible false alarm)"
+              # Show warning only in debug mode but don't send notifications when local connectivity is lost
+              if [ "$SHOW_DEBUG" = "true" ]; then
+                alert "$YELLOW" "[$IP] 📉 [LOSS ALERT?] Excessive packet loss: ${LOSS_PERCENT}% (Local connectivity lost, possible false alarm)"
+              fi
             else
               # Normal alert when we have local connectivity
               alert "$RED" "[$IP] 📉 [LOSS ALERT] Excessive packet loss in the last ${REPORT_INTERVAL} seconds: ${LOSS_PERCENT}%"
@@ -779,8 +783,17 @@ monitor_target() {
 
           # Loss alert is now handled in the packet loss calculation section
 
-          # Display report only for UP hosts
-          echo -e "$(date '+%Y-%m-%d %H:%M:%S') ${COLOR}[$IP] $STATUS_LABEL | OK: $OK_PINGS, ${LOSS_COLOR}Lost:${NC} ${LOSS_COLOR}$LOST_PINGS (${LOSS_PERCENT}%)${NC}, ${RTT_LABEL_COLOR}RTT:${NC} ${MIN_RTT_COLOR}${MIN_RTT}${NC}/${AVG_RTT_COLOR}${RTT_AVG}${NC}/${MAX_RTT_COLOR}${MAX_RTT}${NC}, ${TTL_COLOR}TTL:${NC} ${TTL_COLOR}${TTL}${NC}, ${JITTER_COLOR}Jitter:${NC} ${JITTER_COLOR}${JITTER}${NC}, ${MOS_COLOR}MOS:${NC} ${MOS_COLOR}${MOS}${NC}, ${MOS_COLOR}R-factor:${NC} ${MOS_COLOR}${R_FACTOR}${NC}"
+          # Display report only for UP hosts and when we have local connectivity
+          # First check if local connectivity is lost
+          if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
+            # When local connectivity is lost, only show reports in debug mode
+            if [ "$SHOW_DEBUG" = "true" ]; then
+              echo -e "$(date '+%Y-%m-%d %H:%M:%S') ${YELLOW}[$IP] $STATUS_LABEL | Report suppressed (Local connectivity lost)${NC}"
+            fi
+          else
+            # Normal report when we have local connectivity
+            echo -e "$(date '+%Y-%m-%d %H:%M:%S') ${COLOR}[$IP] $STATUS_LABEL | OK: $OK_PINGS, ${LOSS_COLOR}Lost:${NC} ${LOSS_COLOR}$LOST_PINGS (${LOSS_PERCENT}%)${NC}, ${RTT_LABEL_COLOR}RTT:${NC} ${MIN_RTT_COLOR}${MIN_RTT}${NC}/${AVG_RTT_COLOR}${RTT_AVG}${NC}/${MAX_RTT_COLOR}${MAX_RTT}${NC}, ${TTL_COLOR}TTL:${NC} ${TTL_COLOR}${TTL}${NC}, ${JITTER_COLOR}Jitter:${NC} ${JITTER_COLOR}${JITTER}${NC}, ${MOS_COLOR}MOS:${NC} ${MOS_COLOR}${MOS}${NC}, ${MOS_COLOR}R-factor:${NC} ${MOS_COLOR}${R_FACTOR}${NC}"
+          fi
 
           # Call hook if available - passing metrics as JSON for extensibility
           if type hook_on_status_report &>/dev/null; then
