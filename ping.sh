@@ -563,8 +563,11 @@ monitor_target() {
           # This will capture everything after the colon and space
           local error_part="${BASH_REMATCH[1]}"
 
-          # Remove any trailing punctuation or excess info
-          error_part=$(echo "$error_part" | sed 's/([^)]*)//g' | sed 's/\.$//g' | sed 's/from.*//g' | xargs)
+          # Remove sequence numbers, brackets and clean up the message
+          error_part=$(echo "$error_part" | sed 's/\[[0-9]*\],\s*//' | sed 's/([^)]*)//g' | sed 's/\.$//g' | sed 's/from.*//g' | xargs)
+
+          # Capitalize first letter for consistency
+          error_part=$(echo "$error_part" | sed 's/^\([a-z]\)/\U\1/')
 
           if [ -n "$error_part" ]; then
             failure_reason="$error_part"
@@ -574,7 +577,7 @@ monitor_target() {
           if [[ "$line" == *"unreachable"* ]]; then
             failure_reason="Host unreachable"
           elif [[ "$line" == *"timeout"* || "$line" == *"timed out"* ]]; then
-            failure_reason="Timeout"
+            failure_reason="Timed out"
           elif [[ "$line" == *"Network unreachable"* ]]; then
             failure_reason="Network unreachable"
           elif [[ "$line" == *"No route to host"* ]]; then
