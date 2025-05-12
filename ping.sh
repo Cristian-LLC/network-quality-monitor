@@ -127,7 +127,7 @@ if [ -n "$BASH_VERSION" ]; then
     if (
       # Try in a subshell to avoid affecting the main script
       set +e  # Don't exit on error
-      declare -A test_array 2>/dev/null
+      declare -A _test_array 2>/dev/null
       echo $? # Return status
     ) ; then
       BASH_SUPPORTS_ASSOC_ARRAYS=1
@@ -187,13 +187,15 @@ cleanup() {
       # Get child processes (fping instances) for this monitor process
       # Get better information about child processes (fping and others)
       local child_info=""
-      local fping_pids=$(ps -o pid,command | grep "[f]ping.*$target" | awk '{print $1}')
+      local fping_pids
+      fping_pids=$(pgrep -f "fping.*$target" || echo "")
 
       if [[ -n "$fping_pids" ]]; then
         child_info="fping: $fping_pids"
       else
         # Try to get any children
-        local all_children=$(pgrep -P "$pid" 2>/dev/null || echo "")
+        local all_children
+        all_children=$(pgrep -P "$pid" 2>/dev/null || echo "")
         if [[ -n "$all_children" ]]; then
           child_info="process(es): $all_children"
         else
@@ -228,7 +230,7 @@ cleanup() {
 
   # Clean up temporary files (named pipes and signal files)
   local num_fifos
-  num_fifos=$(ls -1 /tmp/fping_fifo_* 2>/dev/null | wc -l)
+  num_fifos=$(find /tmp -name "fping_fifo_*" -type p 2>/dev/null | wc -l)
   if [ "$num_fifos" -gt 0 ]; then
     echo -e "${CYAN}Cleaning up $num_fifos temporary files...${NC}"
     rm -f /tmp/fping_fifo_*
@@ -239,8 +241,13 @@ cleanup() {
     rm -f /tmp/connectivity_restored
   fi
 
+  # Clean up flag files
+  rm -f /tmp/network_monitor_flags/grace_period_notice_shown
+  rm -f /tmp/network_monitor_flags/grace_end_notice_shown
+
   # Final verification to make sure all processes are properly terminated
-  local remaining_fping=$(ps -o pid,command | grep "[f]ping" | grep -v grep | wc -l)
+  local remaining_fping
+  remaining_fping=$(pgrep -c "fping" 2>/dev/null || echo "0")
   if [[ $remaining_fping -gt 0 ]]; then
     echo -e "${YELLOW}Found $remaining_fping remaining fping processes. Force killing all fping processes...${NC}"
     killall -9 fping 2>/dev/null
@@ -410,7 +417,7 @@ monitor_target() {
   # Variables for RTT statistics
   local RTT_AVG="0.0"
   local JITTER="0.0"
-  local JITTER_COLOR=$GREEN
+  local JITTER_COLOR="$GREEN"
   local TTL="0"
   local MIN_RTT="9999.9"
   local MAX_RTT="0.0"
@@ -444,6 +451,14 @@ monitor_target() {
   MONITOR_PIDS+=("$MONITOR_PID")
   # Store target for mapping back in cleanup
   MONITOR_TARGETS+=("$IP")
+
+  # For the primary monitor (1.1.1.1), ensure flags are freshly reset
+  # This prevents race conditions with flag files from other monitors
+  if [ "$IP" = "1.1.1.1" ]; then
+    # Reset flags in the filesystem for all processes
+    rm -f /tmp/network_monitor_flags/grace_period_notice_shown
+    rm -f /tmp/network_monitor_flags/grace_end_notice_shown
+  fi
 
   # Store fping PID and target in parallel arrays for compatibility
   FPING_PIDS+=("$FPING_PID")
@@ -482,33 +497,57 @@ monitor_target() {
 
     # Update global grace period if file exists
     if [ -f "/tmp/connectivity_restored" ]; then
-      # Read grace period end time
-      local file_grace_period
-      file_grace_period=$(cat "/tmp/connectivity_restored")
+      # Check file modification time - ignore if the file is older than 2 minutes
+      local file_mtime
+      file_mtime=$(stat -c %Y "/tmp/connectivity_restored" 2>/dev/null || stat -f %m "/tmp/connectivity_restored" 2>/dev/null)
+      local now_time=$now
 
-      # Only update if the file has a more recent timestamp than our current setting
-      if [ "$file_grace_period" -gt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
-        CONNECTIVITY_GRACE_PERIOD_UNTIL="$file_grace_period"
-          # Only 1.1.1.1 is allowed to show the entering message
-        if [ "$IP" = "1.1.1.1" ] && ! $GRACE_PERIOD_NOTICE_SHOWN; then
-          echo -e "${YELLOW}Entering grace period - monitoring statistics will be reset${NC}"
-          GRACE_PERIOD_NOTICE_SHOWN=true
-        fi
-        # Reset network status to up immediately
-        if ! $NETWORK_OK; then
-          NETWORK_OK=true
-          alert "$GREEN" "[$IP] [UP] ✅ RECOVERED: Connectivity restored during grace period"
+      # Only process if file is recent (last 2 minutes) and if the file has contents
+      if [ "$((now_time - file_mtime))" -lt 120 ] && [ -s "/tmp/connectivity_restored" ]; then
+        # Read grace period end time
+        local file_grace_period
+        file_grace_period=$(cat "/tmp/connectivity_restored")
+
+        # Make sure it's a valid timestamp (numeric and reasonable)
+        if [[ "$file_grace_period" =~ ^[0-9]+$ ]] && [ "$file_grace_period" -gt 0 ]; then
+          # Only update if the file has a more recent timestamp than our current setting
+          # AND it's in the future (not from an old run)
+          if [ "$file_grace_period" -gt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] && [ "$file_grace_period" -gt "$now_time" ]; then
+            CONNECTIVITY_GRACE_PERIOD_UNTIL="$file_grace_period"
+
+            # Always reset statistics immediately when entering grace period
+            OK_PINGS=0
+            LOST_PINGS=0
+            CONSECUTIVE_LOSS=0
+
+            # Check for the presence of flag file to prevent multiple notices
+            if [ "$IP" = "1.1.1.1" ] && [ ! -f "/tmp/network_monitor_flags/grace_period_notice_shown" ]; then
+              echo -e "${YELLOW}Entering grace period - monitoring statistics will be reset${NC}"
+              # Create flag file to prevent duplicate messages across processes
+              touch "/tmp/network_monitor_flags/grace_period_notice_shown"
+              GRACE_PERIOD_NOTICE_SHOWN=true
+            else
+              # Read flag from file for other processes
+              GRACE_PERIOD_NOTICE_SHOWN=true
+            fi
+
+            # Reset network status to up immediately
+            if ! $NETWORK_OK; then
+              NETWORK_OK=true
+              alert "$GREEN" "[$IP] [UP] ✅ RECOVERED: Connectivity restored during grace period"
+            fi
+          fi
         fi
       fi
     fi
 
     # If we're in the grace period after connectivity restoration
-    if [ $now -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+    if [ "$now" -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
       # We're in the grace period - reset all counters and ignore all data
       if [ "$SHOW_DEBUG" = "true" ] && [ "$IP" = "1.1.1.1" ]; then
-        local seconds_left=$(($CONNECTIVITY_GRACE_PERIOD_UNTIL - $now))
+        local seconds_left=$((CONNECTIVITY_GRACE_PERIOD_UNTIL - now))
         if [ $((seconds_left % 5)) -eq 0 ]; then  # Only show every 5 seconds
-          echo -e "${YELLOW}In grace period - $(($CONNECTIVITY_GRACE_PERIOD_UNTIL - $now)) seconds remaining${NC}"
+          echo -e "${YELLOW}In grace period - $((CONNECTIVITY_GRACE_PERIOD_UNTIL - now)) seconds remaining${NC}"
         fi
       fi
 
@@ -535,12 +574,17 @@ monitor_target() {
 
     # Check if grace period just ended (within last 5 seconds)
     # Note: Use a wider window to catch the transition
-    if [ $now -ge "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] && [ $now -le $(($CONNECTIVITY_GRACE_PERIOD_UNTIL + 5)) ]; then
+    if [ "$now" -ge "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ] && [ "$now" -le $((CONNECTIVITY_GRACE_PERIOD_UNTIL + 5)) ]; then
       # Only show this message once across all processes
-      # Only 1.1.1.1 is allowed to show the message
-      if [ "$IP" = "1.1.1.1" ] && ! $GRACE_END_NOTICE_SHOWN; then
+      # Check for the presence of flag file to prevent multiple notices
+      if [ "$IP" = "1.1.1.1" ] && [ ! -f "/tmp/network_monitor_flags/grace_end_notice_shown" ]; then
         # Notify that grace period has ended
         echo -e "${GREEN}✓ Grace period ended - resuming normal monitoring with fresh statistics${NC}"
+        # Create flag file to prevent duplicate messages across processes
+        touch "/tmp/network_monitor_flags/grace_end_notice_shown"
+        GRACE_END_NOTICE_SHOWN=true
+      else
+        # Update local flag based on file presence
         GRACE_END_NOTICE_SHOWN=true
       fi
 
@@ -557,6 +601,11 @@ monitor_target() {
       # Clear grace period to avoid multiple messages
       # By setting it to 1, we ensure it's in the past
       CONNECTIVITY_GRACE_PERIOD_UNTIL=1
+
+      # Clear connectivity restoration file to prevent reprocessing
+      if [ "$IP" = "1.1.1.1" ]; then
+        rm -f /tmp/connectivity_restored
+      fi
     fi
 
     # Debug - display the line to see the format
@@ -632,11 +681,11 @@ monitor_target() {
           # 10-30ms: Yellow (warning)
           # > 30ms: Red (bad)
           if (( $(echo "$JITTER > 30.0" | bc -l) )); then
-            JITTER_COLOR=$RED
+            JITTER_COLOR="$RED"
           elif (( $(echo "$JITTER > 10.0" | bc -l) )); then
-            JITTER_COLOR=$YELLOW
+            JITTER_COLOR="$YELLOW"
           else
-            JITTER_COLOR=$GREEN
+            JITTER_COLOR="$GREEN"
           fi
         fi
 
@@ -667,9 +716,10 @@ monitor_target() {
           local error_part="${BASH_REMATCH[1]}"
 
           # Remove sequence numbers, brackets and clean up the message
-          error_part=$(echo "$error_part" | sed 's/\[[0-9]*\],\s*//' | sed 's/([^)]*)//g' | sed 's/\.$//g' | sed 's/from.*//g' | xargs)
+          error_part=$(echo "$error_part" | sed -E 's/\[[0-9]+\],\s*//; s/\([^)]*\)//g; s/\.$//g; s/from.*//g' | xargs)
 
           # Handle specific error messages for clarity and consistency
+          # Using parameter expansion where possible for string manipulation
           case "$error_part" in
             *[Tt]"imed out"*|*"100% loss"*)
               # Check if it's a WiFi off scenario or just a normal timeout
@@ -721,23 +771,54 @@ monitor_target() {
           echo "Debug - Parsed error: '$failure_reason' from line: '$line'"
         fi
 
-        # Force a connectivity check immediately when we detect a failure
-        # This ensures we don't miss status changes even if the check interval hasn't passed
-        LAST_CONNECTIVITY_CHECK=0
-        check_local_connectivity
+        # Only check connectivity if it's already up or we don't have a recent restoration
+        # Avoid immediately rechecking right after restoration to prevent flapping alerts
+        if [ "$LOCAL_CONNECTIVITY" = "true" ] || [ ! -f "/tmp/connectivity_restored" ]; then
+          # Force a connectivity check immediately when we detect a failure
+          # This ensures we don't miss status changes even if the check interval hasn't passed
+          LAST_CONNECTIVITY_CHECK=0
+          check_local_connectivity
+        else
+          # Check if we're already in the grace period - if so, reset consecutive losses
+          if [ "$(date +%s)" -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+            # Reset counters to prevent false alerts during grace period
+            CONSECUTIVE_LOSS=0
+          fi
+        fi
 
         # If we have many consecutive losses and grace period is active, reset stats
-        if [ $CONSECUTIVE_LOSS -gt 5 ] && [ $(date +%s) -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+        if [ $CONSECUTIVE_LOSS -gt 5 ] && [ "$(date +%s)" -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
           # Reset statistics as we're likely recovering from connection issues
           reset_all_statistics
           # Skip processing this line
           continue
         fi
 
-        # Check if network is down
-        if "$NETWORK_OK" && [ $CONSECUTIVE_LOSS -ge "$MAX_CONSECUTIVE_LOSS" ]; then
+        # Check if network is down - but first check if we're in or entering grace period
+        local now_check=$(date +%s)
+        # Check if there's a recent connectivity_restored file indicating grace period
+        local entering_grace=false
+        if [ -f "/tmp/connectivity_restored" ]; then
+          local file_mtime
+          file_mtime=$(stat -c %Y "/tmp/connectivity_restored" 2>/dev/null || stat -f %m "/tmp/connectivity_restored" 2>/dev/null)
+
+          # File exists and is very recent (created in last 2 seconds)
+          if [ $((now_check - file_mtime)) -lt 2 ]; then
+            entering_grace=true
+            # Reset consecutive losses to prevent immediate false alerts during transition
+            CONSECUTIVE_LOSS=0
+          fi
+        fi
+
+        # Proceed with normal DOWN check if we're not entering grace period
+        if [ "$entering_grace" = "false" ] && "$NETWORK_OK" && [ $CONSECUTIVE_LOSS -ge "$MAX_CONSECUTIVE_LOSS" ]; then
+          # Don't show alerts during grace period
+          if [ $now_check -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+            # In grace period - quietly mark the network as up instead of down
+            NETWORK_OK=true
+            CONSECUTIVE_LOSS=0
           # When local connectivity is lost, suppress or mark differently
-          if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
+          elif [ "$LOCAL_CONNECTIVITY" = "false" ]; then
             # Show warning only in debug mode but don't send notifications when local connectivity is lost
             if [ "$SHOW_DEBUG" = "true" ]; then
               alert "$YELLOW" "[$IP] [DOWN?] ⚠️ ${CONSECUTIVE_LOSS} consecutive losses! (Local connectivity lost, possible false alarm)"
@@ -762,15 +843,17 @@ monitor_target() {
         TOTAL_PINGS=$((OK_PINGS + LOST_PINGS))
 
         if [ $TOTAL_PINGS -gt 0 ]; then
-          LOSS_PERCENT=$(safe_bc "$LOST_PINGS * 100 / $TOTAL_PINGS")
+          local loss_calc
+          loss_calc=$(safe_bc "$LOST_PINGS * 100 / $TOTAL_PINGS")
+          LOSS_PERCENT=$loss_calc
         else
           LOSS_PERCENT="0.0"
         fi
 
         # Set color for packet loss
-        LOSS_COLOR=$GREEN
+        LOSS_COLOR="$GREEN"
         if (( $(echo "$LOSS_PERCENT >= $LOSS_ALERT_THRESHOLD" | bc -l) )); then
-          LOSS_COLOR=$RED
+          LOSS_COLOR="$RED"
 
           # Only show loss alert if network is UP
           # This prevents showing loss alerts for hosts we already know are down
@@ -796,53 +879,53 @@ monitor_target() {
             fi
           fi
         elif (( $(echo "$LOSS_PERCENT > 0" | bc -l) )); then
-          LOSS_COLOR=$YELLOW
+          LOSS_COLOR="$YELLOW"
         fi
 
         # Set colors for MIN/AVG/MAX RTT values
-        RTT_LABEL_COLOR=$GREEN  # Color for the "RTT:" label
+        RTT_LABEL_COLOR="$GREEN"  # Color for the "RTT:" label
 
         # Color for MIN RTT
-        MIN_RTT_COLOR=$GREEN
+        MIN_RTT_COLOR="$GREEN"
         if (( $(echo "$MIN_RTT > 150" | bc -l) )); then
-          MIN_RTT_COLOR=$RED
+          MIN_RTT_COLOR="$RED"
         elif (( $(echo "$MIN_RTT > 80" | bc -l) )); then
-          MIN_RTT_COLOR=$YELLOW
+          MIN_RTT_COLOR="$YELLOW"
         fi
 
         # Color for AVG RTT - this also determines the label color
-        AVG_RTT_COLOR=$GREEN
+        AVG_RTT_COLOR="$GREEN"
         if (( $(echo "$RTT_AVG > 150" | bc -l) )); then
-          AVG_RTT_COLOR=$RED
-          RTT_LABEL_COLOR=$RED
+          AVG_RTT_COLOR="$RED"
+          RTT_LABEL_COLOR="$RED"
         elif (( $(echo "$RTT_AVG > 80" | bc -l) )); then
-          AVG_RTT_COLOR=$YELLOW
-          RTT_LABEL_COLOR=$YELLOW
+          AVG_RTT_COLOR="$YELLOW"
+          RTT_LABEL_COLOR="$YELLOW"
         fi
 
         # Color for MAX RTT
-        MAX_RTT_COLOR=$GREEN
+        MAX_RTT_COLOR="$GREEN"
         if (( $(echo "$MAX_RTT > 150" | bc -l) )); then
-          MAX_RTT_COLOR=$RED
+          MAX_RTT_COLOR="$RED"
         elif (( $(echo "$MAX_RTT > 80" | bc -l) )); then
-          MAX_RTT_COLOR=$YELLOW
+          MAX_RTT_COLOR="$YELLOW"
         fi
 
         # Set color for TTL
-        TTL_COLOR=$GREEN
+        TTL_COLOR="$GREEN"
         if [[ "$TTL" != "0" && "$TTL" != "N/A" ]]; then
           # Only do numeric comparison if TTL is a number
           if [[ "$TTL" =~ ^[0-9]+$ ]]; then
             if (( TTL < 64 )); then
               if (( TTL < 32 )); then
-                TTL_COLOR=$RED
+                TTL_COLOR="$RED"
               else
-                TTL_COLOR=$YELLOW
+                TTL_COLOR="$YELLOW"
               fi
             fi
           fi
         else
-          TTL_COLOR=$CYAN
+          TTL_COLOR="$CYAN"
         fi
         
         # Calculate MOS and R-factor if we have valid RTT
@@ -864,24 +947,24 @@ monitor_target() {
         # Status label and color
         if $NETWORK_OK; then
           STATUS_LABEL="[UP] ✅"
-          COLOR=$CYAN
+          COLOR="$CYAN"
 
           # Add QoS color for MOS/R-factor value based on ITU-T standards
-          MOS_COLOR=$CYAN
+          MOS_COLOR="$CYAN"
           if [[ "$MOS" != "N/A" ]] && [[ "$R_FACTOR" != "N/A" ]]; then
             # Color based on R-factor (more accurate than MOS coloring)
             # First check that R_FACTOR is a number
             if [[ "$R_FACTOR" =~ ^[0-9]+$ ]]; then
               if (( R_FACTOR >= 81 )); then
-                MOS_COLOR=$GREEN        # Excellent (R ≥ 81)
+                MOS_COLOR="$GREEN"        # Excellent (R ≥ 81)
               elif (( R_FACTOR >= 71 )); then
-                MOS_COLOR=$GREEN        # Good (R 71-80)
+                MOS_COLOR="$GREEN"        # Good (R 71-80)
               elif (( R_FACTOR >= 61 )); then
-                MOS_COLOR=$YELLOW       # Fair (R 61-70)
+                MOS_COLOR="$YELLOW"       # Fair (R 61-70)
               elif (( R_FACTOR >= 51 )); then
-                MOS_COLOR=$YELLOW       # Poor (R 51-60)
+                MOS_COLOR="$YELLOW"       # Poor (R 51-60)
               else
-                MOS_COLOR=$RED          # Bad (R < 50)
+                MOS_COLOR="$RED"          # Bad (R < 50)
               fi
             fi
           fi
@@ -908,14 +991,14 @@ monitor_target() {
           fi
 
           # Check if we're in the grace period and need to reset statistics
-          if [ $(date +%s) -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
+          if [ "$(date +%s)" -lt "$CONNECTIVITY_GRACE_PERIOD_UNTIL" ]; then
             reset_all_statistics
           fi
         else
           # For DOWN hosts, we don't show regular report, just set metrics to N/A
           # for completeness (though we won't be using them)
           STATUS_LABEL="[DOWN] 🛑"
-          COLOR=$RED
+          COLOR="$RED"
           MIN_RTT="N/A"
           RTT_AVG="N/A"
           MAX_RTT="N/A"
@@ -985,7 +1068,7 @@ check_local_connectivity() {
   
   # Only check at the specified interval to avoid excessive checks
   # Unless LAST_CONNECTIVITY_CHECK is 0, which means we forced a check
-  if [ $LAST_CONNECTIVITY_CHECK -ne 0 ] && [ $((now - LAST_CONNECTIVITY_CHECK)) -lt $LOCAL_CONNECTIVITY_CHECK_INTERVAL ]; then
+  if [ $LAST_CONNECTIVITY_CHECK -ne 0 ] && [ $((now - LAST_CONNECTIVITY_CHECK)) -lt "$LOCAL_CONNECTIVITY_CHECK_INTERVAL" ]; then
     return 0
   fi
   
@@ -1150,20 +1233,38 @@ check_local_connectivity() {
       if [ "$SHOW_DEBUG" = "true" ]; then
         echo "Local connectivity restored!"
       fi
-      # Print a notice when connectivity is restored (only once)
-      if ! $GRACE_PERIOD_NOTICE_SHOWN; then
-        echo -e "${GREEN}⚡ Local connectivity has been restored! Starting 30 second grace period...${NC}"
-        GRACE_PERIOD_NOTICE_SHOWN=true
-        # Also reset the end notice flag
-        GRACE_END_NOTICE_SHOWN=false
-      fi
 
       # Set a 30 second grace period - no alerts during this time
       # Calculate timestamp 30 seconds from now
       CONNECTIVITY_GRACE_PERIOD_UNTIL=$(($(date +%s) + 30))
 
-      # Save grace period end time to a file for all processes to read
+      # First save grace period end time to a file for all processes to read
+      # This must happen BEFORE showing messages to prevent race conditions
       echo "$CONNECTIVITY_GRACE_PERIOD_UNTIL" > /tmp/connectivity_restored
+
+      # Clear any pending loss counters immediately to prevent false alerts
+      # Reset all statistics now to prevent any false alerts
+      OK_PINGS=0
+      LOST_PINGS=0
+      CONSECUTIVE_LOSS=0
+      START_TS=$(date +%s)
+      MIN_RTT="9999.9"
+      MAX_RTT="0.0"
+      RECENT_RTT=()
+      JITTER="0.0"
+
+      # Reset IP-specific temporary files
+      rm -f /tmp/reset_needed_*
+
+      # Print a notice when connectivity is restored (only once)
+      if ! $GRACE_PERIOD_NOTICE_SHOWN && [ ! -f "/tmp/network_monitor_flags/grace_period_notice_shown" ]; then
+        echo -e "${GREEN}⚡ Local connectivity has been restored! Starting 30 second grace period...${NC}"
+        touch "/tmp/network_monitor_flags/grace_period_notice_shown"
+        GRACE_PERIOD_NOTICE_SHOWN=true
+        # Also reset the end notice flag
+        rm -f "/tmp/network_monitor_flags/grace_end_notice_shown"
+        GRACE_END_NOTICE_SHOWN=false
+      fi
 
       # Process queued alerts now that we have connectivity
       if type process_alert_queue &>/dev/null; then
@@ -1180,9 +1281,11 @@ check_local_connectivity() {
       # Print a notice when connectivity is lost
       echo -e "${YELLOW}⚠️ Local connectivity has been lost! Alerts will be suppressed until connectivity is restored.${NC}"
 
-      # Reset the grace period notification flags
+      # Reset the grace period notification flags in both memory and filesystem
       GRACE_PERIOD_NOTICE_SHOWN=false
       GRACE_END_NOTICE_SHOWN=false
+      rm -f /tmp/network_monitor_flags/grace_period_notice_shown
+      rm -f /tmp/network_monitor_flags/grace_end_notice_shown
     fi
     LOCAL_CONNECTIVITY=false
   fi
@@ -1366,6 +1469,24 @@ if [ "$SHOW_DEBUG" = "true" ]; then
   echo "  Interval: $LOCAL_CONNECTIVITY_CHECK_INTERVAL seconds"
   echo "  Servers: ${LOCAL_CONNECTIVITY_CHECK_SERVERS[*]}"
 fi
+
+# Remove any existing connectivity restoration file at startup
+rm -f /tmp/connectivity_restored
+
+# Create flag files directory with proper permissions if it doesn't exist
+mkdir -p /tmp/network_monitor_flags
+chmod 755 /tmp/network_monitor_flags
+
+# Remove any stale notification flags at startup
+rm -f /tmp/network_monitor_flags/grace_period_notice_shown
+rm -f /tmp/network_monitor_flags/grace_end_notice_shown
+
+# Reset grace period flags to avoid messages at startup
+GRACE_PERIOD_NOTICE_SHOWN=false
+# Set grace period end flag to false (tracks grace period completion notification)
+# Used by monitor_target() function to prevent duplicate notifications when grace period ends
+GRACE_END_NOTICE_SHOWN=false
+CONNECTIVITY_GRACE_PERIOD_UNTIL=1  # Set to 1 to indicate past time
 
 # Initial connectivity check before starting
 check_local_connectivity

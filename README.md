@@ -271,24 +271,49 @@ Each target in the `targets` array has the following fields:
 - `[LOSS ALERT]`: Triggered when packet loss percentage exceeds the configured threshold
 - `[UP]`: Displayed when a previously down connection recovers
 
-## Offline Alert Handling
+## Connectivity Management & Alert Handling
 
-Network Quality Monitor includes a robust system for handling alerts during network outages:
+Network Quality Monitor includes a sophisticated system for managing connectivity changes and handling alerts during network outages:
 
-- Alerts are automatically queued when internet connectivity is unavailable
+### Connectivity Detection
 - Advanced multi-layered connectivity detection system works reliably across different operating systems:
   - DNS resolution using multiple methods (dig, host, nslookup) with appropriate OS-specific timeout handling
   - HTTP(S) checks via curl to popular services
   - ICMP ping tests to multiple configurable servers
   - Automatic fallback through detection methods for maximum reliability
   - Cross-platform timeout management that works on both macOS and Linux
-- Visual indicators in console output when connectivity status changes
+
+### Connectivity Restoration Handling
+- Implements a "grace period" after connectivity is restored to prevent false alerts
+  - 30-second grace period starts automatically when connectivity returns
+  - All statistics are reset after connectivity restoration
+  - False alerts are suppressed during network transitions
+  - Visual indicators in console output when connectivity status changes
+  - Process synchronization ensures consistent notification across multiple monitoring processes
+  - Prevents duplicate alerts during connectivity transitions
+
+### Offline Alert System
+- Alerts are automatically queued when internet connectivity is unavailable
 - Local connectivity status affects alert classification (potential false alarms are marked)
 - Queued alerts are delivered automatically when connectivity is restored
 - Queued alerts older than 24 hours are automatically cleaned up
 - All delayed alerts include an indication that they were delivered after the original event
 
 ## Technical Implementation Details
+
+### Code Quality & Best Practices
+
+The script follows several bash scripting best practices:
+
+- **Defensive programming**: Extensive error handling and input validation
+- **Variable quoting**: All variables are properly quoted to prevent word splitting and globbing
+- **Process management**: Clean process tree handling for proper cleanup on exit
+- **Cross-platform compatibility**: Graceful fallbacks for both macOS and Linux
+- **Proper file handling**: Secure temporary file creation and cleanup
+- **Static code analysis friendly**: Passes shellcheck with minimal warnings
+- **Modular design**: Functionality separated into logical components
+- **Declarative configuration**: JSON-based configuration for easy modification
+- **Resource efficiency**: Optimized for minimal resource usage during long-running operation
 
 ### ITU-T G.107 E-model Implementation
 
