@@ -1,0 +1,219 @@
+{
+  "general": {
+    "debug_mode": false,
+    "log_level": "info",
+    "log_directory": "logs",
+    "log_retention_days": 7
+  },
+  "connectivity": {
+    "enabled": true,
+    "check_interval": 1,
+    "recovery": {
+      "grace_period_seconds": 30,
+      "reset_statistics_on_recovery": true
+    },
+    "servers": [
+      {
+        "host": "1.1.1.1",
+        "protocol": "ping",
+        "description": "Cloudflare DNS"
+      },
+      {
+        "host": "8.8.8.8",
+        "protocol": "ping",
+        "description": "Google DNS"
+      },
+      {
+        "host": "9.9.9.9",
+        "protocol": "ping",
+        "description": "Quad9 DNS"
+      }
+    ],
+    "http_check": {
+      "enabled": true,
+      "urls": [
+        "https://www.google.com",
+        "https://cloudflare.com"
+      ],
+      "timeout_seconds": 2
+    },
+    "dns_check": {
+      "enabled": true,
+      "domains": [
+        "google.com",
+        "cloudflare.com"
+      ],
+      "timeout_seconds": 1
+    }
+  },
+  "monitoring": {
+    "default_settings": {
+      "ping_frequency": 1,
+      "consecutive_loss_threshold": 2,
+      "loss_threshold_pct": 5,
+      "report_interval": 10,
+      "jitter_window_size": 5,
+      "alert_suppression_minutes": 5
+    },
+    "statistics": {
+      "reset_interval_hours": 24,
+      "persistent_storage": {
+        "enabled": true,
+        "file": "logs/statistics.json",
+        "save_interval_minutes": 10
+      }
+    },
+    "advanced": {
+      "enable_ttl_monitoring": true,
+      "enable_jitter_calculation": true,
+      "enable_mos_calculation": true,
+      "min_samples_for_alert": 3,
+      "stale_data_threshold_seconds": 120
+    }
+  },
+  "notifications": {
+    "event_handlers": {
+      "host_down": {
+        "enabled": true,
+        "retry_interval_seconds": 300,
+        "max_alerts_per_hour": 5
+      },
+      "loss_alert": {
+        "enabled": true,
+        "retry_interval_seconds": 600,
+        "max_alerts_per_hour": 3
+      },
+      "recovery": {
+        "enabled": true
+      },
+      "status_report": {
+        "enabled": false,
+        "interval_minutes": 60
+      }
+    },
+    "queue": {
+      "enabled": true,
+      "directory": "/tmp/network_monitor_alerts",
+      "max_age_hours": 24,
+      "cleanup_interval_minutes": 30
+    }
+  },
+  "security": {
+    "webhook_tokens_file": "config/webhook_tokens.json",
+    "api_key_file": "config/api_keys.json",
+    "encrypt_credentials": true
+  },
+  "display": {
+    "colors": {
+      "enabled": true,
+      "rtt": {
+        "good_threshold_ms": 80,
+        "warning_threshold_ms": 150
+      },
+      "jitter": {
+        "good_threshold_ms": 10,
+        "warning_threshold_ms": 30
+      },
+      "ttl": {
+        "warning_threshold": 64,
+        "critical_threshold": 32
+      },
+      "mos": {
+        "good_threshold": 4.0,
+        "fair_threshold": 3.6,
+        "poor_threshold": 3.1
+      },
+      "r_factor": {
+        "excellent_threshold": 81,
+        "good_threshold": 71,
+        "fair_threshold": 61,
+        "poor_threshold": 51
+      }
+    },
+    "console": {
+      "compact_mode": false,
+      "show_alerts_only": false,
+      "show_host_details": true,
+      "indicators": {
+        "up": "✅",
+        "down": "🛑",
+        "warning": "⚠️",
+        "recovery": "⚡",
+        "loss": "📉"
+      }
+    }
+  },
+  "integrations": {
+    "slack": {
+      "enabled": false,
+      "webhook_url": "https://hooks.slack.com/services/REPLACE_WITH_YOUR_WEBHOOK_URL",
+      "default_channel": "#network-alerts",
+      "retries": 3,
+      "retry_delay_seconds": 1,
+      "timeout_seconds": 15,
+      "notifications": {
+        "host_down": {
+          "channel": "#network-alerts",
+          "color": "#FF0000",
+          "emoji": ":red_circle:"
+        },
+        "loss_alert": {
+          "channel": "#network-warnings",
+          "color": "#FFA500",
+          "emoji": ":warning:"
+        },
+        "recovery": {
+          "channel": "#network-alerts",
+          "color": "#36A64F",
+          "emoji": ":large_green_circle:"
+        }
+      }
+    },
+    "email": {
+      "enabled": false,
+      "smtp_server": "smtp.example.com",
+      "smtp_port": 587,
+      "security": "tls",
+      "username": "",
+      "password_encrypted": "",
+      "from_address": "monitoring@example.com",
+      "to_addresses": ["admin@example.com"],
+      "notifications": {
+        "host_down": {
+          "subject_prefix": "[CRITICAL]",
+          "recipients": []
+        },
+        "loss_alert": {
+          "subject_prefix": "[WARNING]",
+          "recipients": []
+        },
+        "recovery": {
+          "subject_prefix": "[RECOVERED]",
+          "recipients": []
+        }
+      }
+    },
+    "webhook": {
+      "enabled": false,
+      "url": "https://example.com/webhook",
+      "token_name": "default",
+      "headers": {
+        "Content-Type": "application/json",
+        "User-Agent": "NetworkQualityMonitor/1.2.0"
+      },
+      "timeout_seconds": 10
+    },
+    "prometheus": {
+      "enabled": false,
+      "metrics_port": 9099,
+      "metrics_path": "/metrics",
+      "metrics": {
+        "rtt": true,
+        "jitter": true,
+        "packet_loss": true,
+        "mos": true,
+        "r_factor": true
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "slack": {
+    "enabled": false,
+    "webhook_url": "https://hooks.slack.com/services/REPLACE_WITH_YOUR_WEBHOOK_URL",
+    "default_channel": "#network-alerts",
+    "notifications": {
+      "host_down": {
+        "channel": "#network-alerts"
+      },
+      "loss_alert": {
+        "channel": "#network-warnings"
+      },
+      "recovery": {
+        "channel": "#network-alerts"
+      }
+    }
+  }
+}

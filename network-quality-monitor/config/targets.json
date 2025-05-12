@@ -1,0 +1,205 @@
+{
+  "targets": [
+    {
+      "id": "cloudflare-dns",
+      "name": "Cloudflare DNS",
+      "ip": "1.1.1.1",
+      "description": "Cloudflare's primary DNS server",
+      "monitoring": {
+        "enabled": true,
+        "ping_frequency": 1,
+        "consecutive_loss_threshold": 2,
+        "loss_threshold_pct": 10,
+        "report_interval": 10,
+        "alert_priority": "high",
+        "tags": ["dns", "production", "external"]
+      },
+      "thresholds": {
+        "rtt": {
+          "warning_ms": 50,
+          "critical_ms": 100
+        },
+        "jitter": {
+          "warning_ms": 5,
+          "critical_ms": 15
+        },
+        "packet_loss": {
+          "warning_pct": 5,
+          "critical_pct": 10
+        }
+      },
+      "notifications": {
+        "slack_channel": "#network-core",
+        "email_recipients": ["network-team@example.com"],
+        "enable_recovery_notification": true
+      }
+    },
+    {
+      "id": "google-dns",
+      "name": "Google DNS",
+      "ip": "8.8.8.8",
+      "description": "Google's primary DNS server",
+      "monitoring": {
+        "enabled": true,
+        "ping_frequency": 1,
+        "consecutive_loss_threshold": 3,
+        "loss_threshold_pct": 5,
+        "report_interval": 15,
+        "alert_priority": "high",
+        "tags": ["dns", "production", "external"]
+      },
+      "thresholds": {
+        "rtt": {
+          "warning_ms": 60,
+          "critical_ms": 120
+        },
+        "jitter": {
+          "warning_ms": 8,
+          "critical_ms": 20
+        },
+        "packet_loss": {
+          "warning_pct": 3,
+          "critical_pct": 8
+        }
+      },
+      "notifications": {
+        "slack_channel": "#network-core",
+        "email_recipients": ["network-team@example.com"],
+        "enable_recovery_notification": true
+      }
+    },
+    {
+      "id": "google-website",
+      "name": "Google Website",
+      "ip": "google.com",
+      "description": "Google's main website (domain resolution)",
+      "monitoring": {
+        "enabled": true,
+        "ping_frequency": 1,
+        "consecutive_loss_threshold": 2,
+        "loss_threshold_pct": 5,
+        "report_interval": 10,
+        "alert_priority": "medium",
+        "tags": ["web", "production", "external"]
+      },
+      "thresholds": {
+        "rtt": {
+          "warning_ms": 80,
+          "critical_ms": 150
+        },
+        "jitter": {
+          "warning_ms": 10,
+          "critical_ms": 25
+        },
+        "packet_loss": {
+          "warning_pct": 2,
+          "critical_pct": 5
+        }
+      },
+      "notifications": {
+        "slack_channel": "#network-monitoring",
+        "email_recipients": [],
+        "enable_recovery_notification": true
+      }
+    },
+    {
+      "id": "microsoft-website",
+      "name": "Microsoft Website",
+      "ip": "microsoft.com",
+      "description": "Microsoft's main website (domain resolution)",
+      "monitoring": {
+        "enabled": true,
+        "ping_frequency": 1,
+        "consecutive_loss_threshold": 2,
+        "loss_threshold_pct": 5,
+        "report_interval": 15,
+        "alert_priority": "medium",
+        "tags": ["web", "production", "external"]
+      },
+      "thresholds": {
+        "rtt": {
+          "warning_ms": 90,
+          "critical_ms": 180
+        },
+        "jitter": {
+          "warning_ms": 12,
+          "critical_ms": 30
+        },
+        "packet_loss": {
+          "warning_pct": 3,
+          "critical_pct": 8
+        }
+      },
+      "notifications": {
+        "slack_channel": "#network-monitoring",
+        "email_recipients": [],
+        "enable_recovery_notification": true
+      }
+    },
+    {
+      "id": "local-router",
+      "name": "Local Router",
+      "ip": "192.168.1.1",
+      "description": "Local network gateway",
+      "monitoring": {
+        "enabled": true,
+        "ping_frequency": 0.5,
+        "consecutive_loss_threshold": 4,
+        "loss_threshold_pct": 1,
+        "report_interval": 5,
+        "alert_priority": "critical",
+        "tags": ["infrastructure", "internal", "core"]
+      },
+      "thresholds": {
+        "rtt": {
+          "warning_ms": 2,
+          "critical_ms": 10
+        },
+        "jitter": {
+          "warning_ms": 1,
+          "critical_ms": 5
+        },
+        "packet_loss": {
+          "warning_pct": 0.5,
+          "critical_pct": 1
+        }
+      },
+      "notifications": {
+        "slack_channel": "#network-core",
+        "email_recipients": ["network-team@example.com", "infrastructure@example.com"],
+        "enable_recovery_notification": true
+      }
+    }
+  ],
+  "target_groups": [
+    {
+      "id": "dns-servers",
+      "name": "DNS Servers",
+      "description": "Critical DNS infrastructure monitoring",
+      "targets": ["cloudflare-dns", "google-dns"],
+      "aggregate_reporting": true,
+      "aggregate_thresholds": {
+        "min_available_targets": 1,
+        "critical_if_below": true
+      }
+    },
+    {
+      "id": "websites",
+      "name": "External Websites",
+      "description": "External website availability monitoring",
+      "targets": ["google-website", "microsoft-website"],
+      "aggregate_reporting": true,
+      "aggregate_thresholds": {
+        "min_available_targets": 1,
+        "critical_if_below": false
+      }
+    },
+    {
+      "id": "infrastructure",
+      "name": "Core Infrastructure",
+      "description": "Critical network infrastructure",
+      "targets": ["local-router"],
+      "aggregate_reporting": false
+    }
+  ]
+}

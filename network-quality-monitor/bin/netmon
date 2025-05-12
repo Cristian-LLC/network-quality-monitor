@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+#
+# Network Quality Monitor - Main Executable Script
+#
+# This is the main entry point for the Network Quality Monitor application.
+# It sets up the environment and launches the monitoring system.
+#
+# Author: Cristian O.
+# Version: 1.2.0
+#
+
+set -e
+
+# Determine base directory (where the script is located)
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Default options
+CONFIG_DIR="${BASE_DIR}/config"
+SRC_DIR="${BASE_DIR}/src"
+LOG_DIR="${BASE_DIR}/logs"
+CONFIG_FILE="${CONFIG_DIR}/config.json"
+TARGETS_FILE="${CONFIG_DIR}/targets.json"
+NOTIFICATION_CONFIG="${CONFIG_DIR}/notifications.json"
+SHOW_DEBUG="false"
+
+# Create log directory if it doesn't exist
+mkdir -p "${LOG_DIR}"
+
+# Export paths for submodules
+export BASE_DIR CONFIG_DIR SRC_DIR LOG_DIR
+export CONFIG_FILE TARGETS_FILE NOTIFICATION_CONFIG
+
+# Command line parameter processing
+show_help() {
+  echo "Network Quality Monitor v1.2.0"
+  echo "Usage: $0 [options]"
+  echo ""
+  echo "Options:"
+  echo "  -h, --help                 Show this help"
+  echo "  -c, --config FILENAME      Specify a different config file (default: ${CONFIG_FILE})"
+  echo "  -t, --targets FILENAME     Specify a different targets file (default: ${TARGETS_FILE})"
+  echo "  -d, --debug                Show additional debug information"
+  echo "  -v, --version              Show program version"
+  echo "  -q, --quiet                Suppress all non-critical output"
+  echo "  --slack-test               Test Slack integration and exit"
+  echo "  --validate                 Validate configuration files and exit"
+  echo ""
+  echo "Examples:"
+  echo "  $0                        Run with default configuration"
+  echo "  $0 -d                     Run with debug output"
+  echo "  $0 -c custom-config.json  Use custom configuration file"
+  echo "  $0 --validate             Validate configuration without starting monitor"
+  exit 0
+}
+
+show_version() {
+  echo "Network Quality Monitor v1.2.0"
+  echo "Copyright © 2025 Cristian O."
+  exit 0
+}
+
+# Process command line parameters
+while [ $# -gt 0 ]; do
+  case $1 in
+    -h|--help)
+      show_help
+      ;;
+    -c|--config)
+      if [ -z "$2" ]; then
+        echo "Error: Option -c requires a parameter."
+        exit 1
+      fi
+      CONFIG_FILE="$2"
+      shift
+      ;;
+    -t|--targets)
+      if [ -z "$2" ]; then
+        echo "Error: Option -t requires a parameter."
+        exit 1
+      fi
+      TARGETS_FILE="$2"
+      shift
+      ;;
+    -d|--debug)
+      SHOW_DEBUG="true"
+      export SHOW_DEBUG
+      ;;
+    -v|--version)
+      show_version
+      ;;
+    -q|--quiet)
+      QUIET_MODE="true"
+      export QUIET_MODE
+      ;;
+    --slack-test)
+      TEST_SLACK="true"
+      export TEST_SLACK
+      ;;
+    --validate)
+      VALIDATE_ONLY="true"
+      export VALIDATE_ONLY
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Run '$0 --help' to see available options."
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+# Source required modules in correct order
+source "${SRC_DIR}/utils/helpers.sh"
+
+# Source configuration management modules
+source "${SRC_DIR}/utils/config.sh"
+source "${SRC_DIR}/utils/config_validator.sh"
+source "${SRC_DIR}/utils/config_hot_reload.sh"
+
+# Load initial configuration
+load_config
+load_targets
+
+# Load environment variable overrides
+load_env_overrides
+
+# If validation mode only, validate and exit
+if [ "$VALIDATE_ONLY" = "true" ]; then
+  if validate_all_config; then
+    echo -e "Configuration validation passed. All files are valid."
+    exit 0
+  else
+    echo -e "Configuration validation failed. Please fix the errors above."
+    exit 1
+  fi
+fi
+
+# Initialize hot reload system
+init_hot_reload
+
+# Load remaining core modules
+source "${SRC_DIR}/core/metrics.sh"
+source "${SRC_DIR}/utils/connectivity.sh"
+source "${SRC_DIR}/core/monitor.sh"
+
+# Load notification modules
+if [ -f "${SRC_DIR}/notifications/queue.sh" ]; then
+  source "${SRC_DIR}/notifications/queue.sh"
+fi
+
+# Load notification handlers
+source "${SRC_DIR}/notifications/handlers/hooks.sh"
+
+if [ -d "${SRC_DIR}/notifications/handlers" ]; then
+  for handler in "${SRC_DIR}/notifications/handlers/"*.sh; do
+    if [ -f "$handler" ] && [ "$handler" != "${SRC_DIR}/notifications/handlers/hooks.sh" ]; then
+      source "$handler"
+      if [ "$SHOW_DEBUG" = "true" ]; then
+        echo "Loaded notification handler: $handler"
+      fi
+    fi
+  done
+fi
+
+# If Slack test mode, run test and exit
+if [ "$TEST_SLACK" = "true" ]; then
+  if type test_slack_configuration &>/dev/null; then
+    test_slack_configuration "Test message from Network Quality Monitor"
+    exit $?
+  else
+    echo "Error: Slack test function not available. Make sure slack.sh is properly loaded."
+    exit 1
+  fi
+fi
+
+# Check dependencies
+check_dependencies
+
+# Create flags directory with proper permissions if it doesn't exist
+mkdir -p /tmp/network_monitor_flags
+chmod 755 /tmp/network_monitor_flags
+
+# Remove any existing connectivity restoration file at startup
+rm -f /tmp/connectivity_restored
+
+# Remove any stale notification flags at startup
+rm -f /tmp/network_monitor_flags/grace_period_notice_shown
+rm -f /tmp/network_monitor_flags/grace_end_notice_shown
+
+# Reset grace period flags to avoid messages at startup
+GRACE_PERIOD_NOTICE_SHOWN=false
+GRACE_END_NOTICE_SHOWN=false
+CONNECTIVITY_GRACE_PERIOD_UNTIL=1  # Set to 1 to indicate past time
+
+# Initial connectivity check before starting
+check_local_connectivity
+
+# Display a banner and instructions at the beginning
+if [ "$QUIET_MODE" != "true" ]; then
+  echo -e "=========================================================="
+  echo -e "Network Quality Monitor v1.2.0 - Starting monitoring processes"
+  echo -e "=========================================================="
+  echo -e "Press Ctrl+C to stop all monitoring processes and exit."
+  if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
+    echo -e "Warning: No local connectivity detected. Alerts will be suppressed."
+  fi
+  echo -e "=========================================================="
+fi
+
+# Add hot-reload check to the main monitoring loop
+# This is done by modifying the monitor_target function to check for config changes
+# Modify the run_monitors function to enable hot reload
+
+# Start a background process to check for configuration changes periodically
+(
+  while true; do
+    sleep 5
+    # Check and reload configuration if changed
+    if check_and_reload_config; then
+      # Send SIGHUP to all monitor processes to apply new configuration
+      for pid in "${MONITOR_PIDS[@]}"; do
+        if ps -p "$pid" > /dev/null 2>&1; then
+          kill -SIGHUP "$pid" 2>/dev/null
+        fi
+      done
+    fi
+  done
+) &
+CONFIG_CHECKER_PID=$!
+
+# Start monitoring
+run_monitors
+
+# This point is only reached if all monitors exit on their own
+# Kill the config checker process if it's still running
+if ps -p "$CONFIG_CHECKER_PID" > /dev/null 2>&1; then
+  kill -9 "$CONFIG_CHECKER_PID" 2>/dev/null
+fi
+
+echo "All monitors have completed. Exiting..."
+exit 0
