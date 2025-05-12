@@ -625,7 +625,9 @@ monitor_target() {
           echo "Debug - Parsed error: '$failure_reason' from line: '$line'"
         fi
 
-        # Run a connectivity check periodically
+        # Force a connectivity check immediately when we detect a failure
+        # This ensures we don't miss status changes even if the check interval hasn't passed
+        LAST_CONNECTIVITY_CHECK=0
         check_local_connectivity
 
         # Check if network is down
@@ -666,7 +668,8 @@ monitor_target() {
           # Only show loss alert if network is UP
           # This prevents showing loss alerts for hosts we already know are down
           if $NETWORK_OK; then
-            # Run a connectivity check before alerting
+            # Force a connectivity check before alerting
+            LAST_CONNECTIVITY_CHECK=0
             check_local_connectivity
 
             # If local connectivity is lost, suppress or mark differently
@@ -819,6 +822,9 @@ monitor_target() {
 # Function to check if local machine has internet connectivity
 # This is used to prevent false-positive alerts when the monitoring machine loses internet
 # Returns: Sets LOCAL_CONNECTIVITY to true or false
+# Function to check if local machine has internet connectivity
+# This is used to prevent false-positive alerts when the monitoring machine loses internet
+# Returns: Sets LOCAL_CONNECTIVITY to true or false
 check_local_connectivity() {
   # If connectivity checking is disabled, always return true
   if [ "$LOCAL_CONNECTIVITY_CHECK_ENABLED" = "false" ]; then
@@ -828,44 +834,195 @@ check_local_connectivity() {
 
   local now
   now=$(date +%s)
-
+  
   # Only check at the specified interval to avoid excessive checks
-  if [ $((now - LAST_CONNECTIVITY_CHECK)) -lt $LOCAL_CONNECTIVITY_CHECK_INTERVAL ]; then
+  # Unless LAST_CONNECTIVITY_CHECK is 0, which means we forced a check
+  if [ $LAST_CONNECTIVITY_CHECK -ne 0 ] && [ $((now - LAST_CONNECTIVITY_CHECK)) -lt $LOCAL_CONNECTIVITY_CHECK_INTERVAL ]; then
     return 0
   fi
-
+  
   LAST_CONNECTIVITY_CHECK=$now
-
+  
   if [ "$SHOW_DEBUG" = "true" ]; then
     echo "Checking local connectivity using: ${LOCAL_CONNECTIVITY_CHECK_SERVERS[*]}"
   fi
-
+  
   # Variable to track if any server is reachable
   local any_reachable=false
-
-  # Check if we can reach any of the configured servers
-  for server in "${LOCAL_CONNECTIVITY_CHECK_SERVERS[@]}"; do
-    if ping -c 1 -W 2 "$server" >/dev/null 2>&1; then
-      any_reachable=true
-      break
+  
+  # Determine which DNS check commands are available
+  local has_host=false
+  local has_dig=false
+  local has_nslookup=false
+  local has_timeout=false
+  
+  if command -v host >/dev/null 2>&1; then
+    has_host=true
+  fi
+  
+  if command -v dig >/dev/null 2>&1; then
+    has_dig=true
+  fi
+  
+  if command -v nslookup >/dev/null 2>&1; then
+    has_nslookup=true
+  fi
+  
+  if command -v timeout >/dev/null 2>&1; then
+    has_timeout=true
+  fi
+  
+  # Try DNS resolution first, using available commands with proper timeout flags
+  
+  # Check if we're on macOS
+  local is_macos=false
+  if [[ "$(uname)" == "Darwin" ]]; then
+    is_macos=true
+  fi
+  
+  # Helper function to run a command with timeout
+  # Usage: run_with_timeout <seconds> <command> [args...]
+  run_with_timeout() {
+    local timeout_secs=$1
+    shift
+    
+    if $has_timeout; then
+      # Use the timeout command if available
+      timeout "$timeout_secs" "$@"
+      return $?
+    else
+      # If timeout command not available, use perl as fallback
+      # This is useful on macOS where timeout might not be installed
+      perl -e '
+        use strict;
+        my $timeout = $ARGV[0];
+        shift @ARGV;
+        my $cmd = join(" ", @ARGV);
+        
+        # Set alarm for timeout seconds
+        eval {
+          local $SIG{ALRM} = sub { die "timeout\n" };
+          alarm $timeout;
+          system($cmd);
+          alarm 0;
+        };
+        if ($@ =~ /timeout/) {
+          exit 124;  # Same exit code as timeout command
+        } else {
+          exit $? >> 8;  # Return command exit code
+        }
+      ' "$timeout_secs" "$@"
+      return $?
     fi
-  done
-
+  }
+  
+  # Try DNS resolution using appropriate command with correct timeout flags for the OS
+  if $has_dig; then
+    # dig has consistent timeout flags on both macOS and Linux
+    if dig +timeout=1 +tries=1 google.com @8.8.8.8 >/dev/null 2>&1 || \
+       dig +timeout=1 +tries=1 cloudflare.com @1.1.1.1 >/dev/null 2>&1; then
+      any_reachable=true
+      if [ "$SHOW_DEBUG" = "true" ]; then
+        echo "Connectivity check succeeded using dig"
+      fi
+    fi
+  elif $has_host; then
+    # host command has different timeout flags on macOS vs Linux
+    if $is_macos; then
+      # macOS host command doesn't support -W flag, so use our timeout wrapper
+      if run_with_timeout 1 host google.com >/dev/null 2>&1 || \
+         run_with_timeout 1 host cloudflare.com >/dev/null 2>&1; then
+        any_reachable=true
+        if [ "$SHOW_DEBUG" = "true" ]; then
+          echo "Connectivity check succeeded using host with timeout wrapper"
+        fi
+      fi
+    else
+      # Linux host command supports -W flag
+      if host -W 1 google.com >/dev/null 2>&1 || \
+         host -W 1 cloudflare.com >/dev/null 2>&1; then
+        any_reachable=true
+        if [ "$SHOW_DEBUG" = "true" ]; then
+          echo "Connectivity check succeeded using host -W"
+        fi
+      fi
+    fi
+  elif $has_nslookup; then
+    # nslookup doesn't have built-in timeout on either OS, so use our timeout wrapper
+    if run_with_timeout 1 nslookup google.com >/dev/null 2>&1 || \
+       run_with_timeout 1 nslookup cloudflare.com >/dev/null 2>&1; then
+      any_reachable=true
+      if [ "$SHOW_DEBUG" = "true" ]; then
+        echo "Connectivity check succeeded using nslookup"
+      fi
+    fi
+  fi
+  
+  # If DNS didn't resolve, try HTTP(S) check using curl if available
+  if ! $any_reachable && command -v curl >/dev/null 2>&1; then
+    if curl --connect-timeout 1 -s https://1.1.1.1/cdn-cgi/trace >/dev/null 2>&1 || \
+       curl --connect-timeout 1 -s https://www.google.com >/dev/null 2>&1; then
+      any_reachable=true
+      if [ "$SHOW_DEBUG" = "true" ]; then
+        echo "Connectivity check succeeded using curl"
+      fi
+    fi
+  fi
+  
+  # As a last resort, try pinging servers
+  if ! $any_reachable; then
+    for server in "${LOCAL_CONNECTIVITY_CHECK_SERVERS[@]}"; do
+      # Determine correct ping flags based on OS
+      if $is_macos; then
+        # macOS ping flags
+        if ping -c 1 -t 1 "$server" >/dev/null 2>&1; then
+          any_reachable=true
+          if [ "$SHOW_DEBUG" = "true" ]; then
+            echo "Connectivity check succeeded by pinging $server"
+          fi
+          break
+        fi
+      else
+        # Linux ping flags
+        if ping -c 1 -W 1 "$server" >/dev/null 2>&1; then
+          any_reachable=true
+          if [ "$SHOW_DEBUG" = "true" ]; then
+            echo "Connectivity check succeeded by pinging $server"
+          fi
+          break
+        fi
+      fi
+    done
+  fi
+  
+  # Check if connectivity status changed
   if $any_reachable; then
     # We have connectivity
-    if [ "$LOCAL_CONNECTIVITY" = "false" ] && [ "$SHOW_DEBUG" = "true" ]; then
-      echo "Local connectivity restored!"
+    if [ "$LOCAL_CONNECTIVITY" = "false" ]; then
+      if [ "$SHOW_DEBUG" = "true" ]; then
+        echo "Local connectivity restored!"
+      fi
+      # Print a notice when connectivity is restored
+      echo -e "${GREEN}⚡ Local connectivity has been restored! Normal alerts will now be shown.${NC}"
+      
+      # Process queued alerts now that we have connectivity
+      if type process_alert_queue &>/dev/null; then
+        process_alert_queue
+      fi
     fi
     LOCAL_CONNECTIVITY=true
   else
     # We don't have connectivity
-    if [ "$LOCAL_CONNECTIVITY" = "true" ] && [ "$SHOW_DEBUG" = "true" ]; then
-      echo "Local connectivity lost! Cannot reach any of: ${LOCAL_CONNECTIVITY_CHECK_SERVERS[*]}"
+    if [ "$LOCAL_CONNECTIVITY" = "true" ]; then
+      if [ "$SHOW_DEBUG" = "true" ]; then
+        echo "Local connectivity lost! Cannot reach any of: ${LOCAL_CONNECTIVITY_CHECK_SERVERS[*]}"
+      fi
+      # Print a notice when connectivity is lost
+      echo -e "${YELLOW}⚠️ Local connectivity has been lost! Alerts will be suppressed until connectivity is restored.${NC}"
     fi
     LOCAL_CONNECTIVITY=false
   fi
 }
-
 # Check required dependencies for script execution
 # Verifies presence of required utilities (fping, jq, bc) and correct configuration
 # Displays error messages and installation suggestions if components are missing
@@ -903,15 +1060,24 @@ check_dependencies() {
   if [ ! -f "$TARGET_FILE" ]; then
     echo -e "${RED}Error: File $TARGET_FILE does not exist.${NC}"
     echo -e "${YELLOW}Create a targets.json file with the following structure:${NC}"
-    echo -e '[
-  {
-    "ip": "1.1.1.1",
-    "ping_frequency": 1,
-    "consecutive_loss_threshold": 2,
-    "loss_threshold_pct": 10,
-    "report_interval": 10
-  }
-]'
+    echo -e '{
+  "config": {
+    "connectivity_check": {
+      "enabled": true,
+      "check_interval": 30,
+      "servers": ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+    }
+  },
+  "targets": [
+    {
+      "ip": "1.1.1.1",
+      "ping_frequency": 1,
+      "consecutive_loss_threshold": 2,
+      "loss_threshold_pct": 10,
+      "report_interval": 10
+    }
+  ]
+}'
     exit 1
   fi
 
@@ -1022,7 +1188,7 @@ if jq -e '.config.connectivity_check' "$TARGET_FILE" > /dev/null 2>&1; then
   # Configuration exists, read it
   LOCAL_CONNECTIVITY_CHECK_ENABLED=$(jq -r '.config.connectivity_check.enabled // true' "$TARGET_FILE")
   LOCAL_CONNECTIVITY_CHECK_INTERVAL=$(jq -r '.config.connectivity_check.check_interval // 30' "$TARGET_FILE")
-
+  
   # Read server array if available
   if jq -e '.config.connectivity_check.servers' "$TARGET_FILE" > /dev/null 2>&1; then
     # Convert JSON array to bash array

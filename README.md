@@ -28,6 +28,15 @@ A powerful bash-based network monitoring tool that provides real-time statistics
 - jq (for JSON configuration processing)
 - bc (for mathematical calculations)
 
+### Optional Tools
+
+These tools will enhance functionality but are not required:
+
+- dig, host, or nslookup (for enhanced connectivity detection)
+- curl (for HTTP-based connectivity checks)
+- timeout command or perl (for limiting operation time on slow connections)
+- Perl (provides fallback timeout implementation on macOS)
+
 ## Installation
 
 ### macOS
@@ -38,8 +47,11 @@ macOS comes with an older version of Bash (3.2) due to licensing issues. The scr
 # Install Homebrew if you don't have it
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Install dependencies
+# Install required dependencies
 brew install fping jq bc
+
+# Install optional dependencies for enhanced connectivity detection
+brew install curl bind # bind provides dig and host commands
 
 # Optional: Install a newer version of Bash (recommended but not required)
 brew install bash
@@ -52,17 +64,23 @@ chsh -s /usr/local/bin/bash
 ### Linux (Debian/Ubuntu)
 
 ```bash
-# Install dependencies
+# Install required dependencies
 sudo apt update
 sudo apt install fping jq bc
+
+# Install optional dependencies for enhanced connectivity detection
+sudo apt install curl dnsutils # dnsutils provides dig, host and nslookup
 ```
 
 ### Linux (RHEL/CentOS/Fedora)
 
 ```bash
-# Install dependencies
+# Install required dependencies
 sudo yum install epel-release
 sudo yum install fping jq bc
+
+# Install optional dependencies for enhanced connectivity detection
+sudo yum install curl bind-utils # bind-utils provides dig, host and nslookup
 ```
 
 ### General Setup
@@ -143,20 +161,41 @@ This is normal on macOS with Bash 3.2. The script will automatically adapt to us
 The `targets.json` file uses the following format:
 
 ```json
-[
-  {
-    "ip": "1.1.1.1",
-    "ping_frequency": 1,
-    "consecutive_loss_threshold": 2,
-    "loss_threshold_pct": 10,
-    "report_interval": 10
-  }
-]
+{
+  "config": {
+    "connectivity_check": {
+      "enabled": true,
+      "check_interval": 1,
+      "servers": ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+    }
+  },
+  "targets": [
+    {
+      "ip": "1.1.1.1",
+      "ping_frequency": 1,
+      "consecutive_loss_threshold": 2,
+      "loss_threshold_pct": 10,
+      "report_interval": 10
+    }
+  ]
+}
 ```
 
 #### Configuration Fields Explained
 
-Each target in the configuration has the following fields:
+The configuration has two main sections: `config` and `targets`.
+
+##### Global Configuration
+
+| Field | Type | Description | Example |
+|---|---|---|---|
+| `config.connectivity_check.enabled` | Boolean | Enable or disable local connectivity checking | `true` |
+| `config.connectivity_check.check_interval` | Number | How often to check local connectivity, in seconds | `1` for checking every second |
+| `config.connectivity_check.servers` | Array | List of servers to check for connectivity | `["1.1.1.1", "8.8.8.8", "9.9.9.9"]` |
+
+##### Target Configuration
+
+Each target in the `targets` array has the following fields:
 
 | Field | Type | Description | Example |
 |---|---|---|---|
@@ -174,6 +213,10 @@ Each target in the configuration has the following fields:
   - Shorter intervals (5-10s) for real-time monitoring
   - Longer intervals (30-60s) for long-term trend analysis with less output
 - The `ping_frequency` of 1 second is suitable for most use cases, but can be increased for less important targets
+- For connectivity checking:
+  - Lower `check_interval` values (1-5s) provide faster response to connectivity changes but increase CPU usage
+  - Use multiple diverse servers in the `servers` array for reliable connectivity detection
+  - Include both public DNS servers (e.g., 1.1.1.1, 8.8.8.8) and major website IPs for best results
 
 ## Output Metrics Explained
 
@@ -233,7 +276,14 @@ Each target in the configuration has the following fields:
 Network Quality Monitor includes a robust system for handling alerts during network outages:
 
 - Alerts are automatically queued when internet connectivity is unavailable
-- Multiple connectivity detection methods ensure accurate connectivity assessment
+- Advanced multi-layered connectivity detection system works reliably across different operating systems:
+  - DNS resolution using multiple methods (dig, host, nslookup) with appropriate OS-specific timeout handling
+  - HTTP(S) checks via curl to popular services
+  - ICMP ping tests to multiple configurable servers
+  - Automatic fallback through detection methods for maximum reliability
+  - Cross-platform timeout management that works on both macOS and Linux
+- Visual indicators in console output when connectivity status changes
+- Local connectivity status affects alert classification (potential false alarms are marked)
 - Queued alerts are delivered automatically when connectivity is restored
 - Queued alerts older than 24 hours are automatically cleaned up
 - All delayed alerts include an indication that they were delivered after the original event

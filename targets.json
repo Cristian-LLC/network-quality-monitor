@@ -2,7 +2,7 @@
   "config": {
     "connectivity_check": {
       "enabled": true,
-      "check_interval": 30,
+      "check_interval": 1,
       "servers": ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
     }
   },
