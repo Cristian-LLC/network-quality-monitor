@@ -229,10 +229,13 @@ cleanup() {
     rm -f /tmp/fping_fifo_*
   fi
 
-  # Remove connectivity reset file if it exists
+  # Remove connectivity reset files if they exist
   if [ -f /tmp/connectivity_restored ]; then
     rm -f /tmp/connectivity_restored
   fi
+
+  # Remove all process-specific reset files
+  rm -f /tmp/reset_needed_* 2>/dev/null
 
   # Final verification to make sure all processes are properly terminated
   local remaining_fping=$(ps -o pid,command | grep "[f]ping" | grep -v grep | wc -l)
@@ -463,13 +466,37 @@ monitor_target() {
     echo -e "${GREEN}Debug:${NC} Monitor process ${YELLOW}PID $MONITOR_PID${NC} is managing fping ${YELLOW}PID $FPING_PID${NC} for ${CYAN}$IP${NC}"
   fi
 
+  # Create a process-specific reset state file
+  touch "/tmp/reset_needed_$MONITOR_PID"
+
   # Now that we're in the background process, show PID in a status message
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') ${YELLOW}Monitor process ${MONITOR_PID}${NC} active for ${GREEN}$IP${NC}"
   
   # Read fping output and process the data
   while read -r line; do
     # Check if connectivity was just restored and we need to reset counters
-    if check_connectivity_reset; then
+    # Check more frequently when we suspect connectivity issues
+    local check_reset=true
+
+    # Check if global connectivity restoration file exists
+    if [ -f "/tmp/connectivity_restored" ]; then
+      # Get the timestamp from the file
+      local global_reset_ts
+      global_reset_ts=$(cat "/tmp/connectivity_restored")
+
+      # Get current time
+      local now
+      now=$(date +%s)
+
+      # If a global reset happened in the last 15 seconds, check more frequently
+      if [ $((now - global_reset_ts)) -lt 15 ]; then
+        # Always check when there's a recent global connectivity restoration
+        check_reset=true
+      fi
+    fi
+
+    # Check at every iteration if we recently had connectivity issues
+    if $check_reset && check_connectivity_reset; then
       # No reset occurred, continue normal processing
       :
     else
@@ -644,6 +671,12 @@ monitor_target() {
         LAST_CONNECTIVITY_CHECK=0
         check_local_connectivity
 
+        # If we have many consecutive losses, make sure to check for resets more aggressively
+        if [ $CONSECUTIVE_LOSS -gt 5 ]; then
+          # Force a check if reset is needed
+          check_connectivity_reset
+        fi
+
         # Check if network is down
         if "$NETWORK_OK" && [ $CONSECUTIVE_LOSS -ge "$MAX_CONSECUTIVE_LOSS" ]; then
           # When local connectivity is lost, suppress or mark differently
@@ -815,6 +848,9 @@ monitor_target() {
             status_json="{\"ip\":\"$IP\",\"status\":\"up\",\"timestamp\":\"$(date +%s)\",\"metrics\":{\"ok_pings\":$OK_PINGS,\"lost_pings\":$LOST_PINGS,\"loss_percent\":$LOSS_PERCENT,\"rtt\":{\"min\":$MIN_RTT,\"avg\":$RTT_AVG,\"max\":$MAX_RTT},\"ttl\":$TTL,\"jitter\":$JITTER,\"mos\":\"$MOS\",\"r_factor\":\"$R_FACTOR\"}}"
             hook_on_status_report "$IP" "$status_json"
           fi
+
+          # Check if we need to reset counters
+          check_connectivity_reset
         else
           # For DOWN hosts, we don't show regular report, just set metrics to N/A
           # for completeness (though we won't be using them)
@@ -849,32 +885,40 @@ monitor_target() {
 # Helper function to check if connectivity was just restored
 # and reset counters if needed
 check_connectivity_reset() {
-  local reset_file="/tmp/connectivity_restored"
+  # Process-specific reset file
+  local process_reset_file="/tmp/reset_needed_$BASHPID"
 
-  # If reset file doesn't exist, no action needed
-  if [ ! -f "$reset_file" ]; then
-    return 0
+  # Check both the global and process-specific reset files
+  local reset_needed=false
+
+  # Check process-specific reset file
+  if [ -f "$process_reset_file" ]; then
+    # Get the timestamp from the file
+    local reset_ts
+    reset_ts=$(cat "$process_reset_file")
+
+    # Get current time
+    local now
+    now=$(date +%s)
+
+    # If file exists and reset is recent (within last 10 seconds)
+    if [ $((now - reset_ts)) -lt 10 ]; then
+      reset_needed=true
+      # Remove reset marker to prevent multiple resets
+      rm -f "$process_reset_file"
+    fi
   fi
 
-  # Get the timestamp from the file
-  local reset_ts
-  reset_ts=$(cat "$reset_file")
-
-  # Get current time
-  local now
-  now=$(date +%s)
-
-  # If reset happened within the last 3 seconds, reset counters
-  if [ $((now - reset_ts)) -lt 3 ]; then
-    if [ "$SHOW_DEBUG" = "true" ]; then
-      echo -e "${YELLOW}[$IP] Resetting counters after connectivity restoration${NC}"
-    fi
+  # If reset is needed
+  if $reset_needed; then
+    # Always show reset message (important enough for user to see)
+    echo -e "${YELLOW}[$IP] Resetting counters after connectivity restoration${NC}"
 
     # Reset counters
     OK_PINGS=0
     LOST_PINGS=0
     CONSECUTIVE_LOSS=0
-    START_TS=$now
+    START_TS=$(date +%s)
 
     # Reset min/max RTT values
     MIN_RTT="9999.9"
@@ -885,7 +929,12 @@ check_connectivity_reset() {
     # If network was marked as down, mark it up again
     if ! $NETWORK_OK; then
       NETWORK_OK=true
+      # Show recovery message
+      alert "$GREEN" "[$IP] [UP] ✅ RECOVERED: Connectivity restored"
     fi
+
+    # Show reset alert - important event
+    alert "$GREEN" "[$IP] Statistics reset after connectivity restoration"
 
     return 1  # Return 1 to indicate reset occurred
   fi
@@ -1080,8 +1129,17 @@ check_local_connectivity() {
       echo -e "${GREEN}⚡ Local connectivity has been restored! Normal alerts will now be shown.${NC}"
 
       # Signal all monitor processes to reset their counters
-      # by updating a global flag and writing to a temp file
+      # Mark the connectivity as restored
       echo "$(date +%s)" > /tmp/connectivity_restored
+
+      # Loop through all monitor PIDs and mark them for reset
+      for pid in "${MONITOR_PIDS[@]}"; do
+        # Mark this process for reset by updating its reset file
+        echo "$(date +%s)" > "/tmp/reset_needed_$pid"
+        if [ "$SHOW_DEBUG" = "true" ]; then
+          echo "Marking process $pid for statistics reset"
+        fi
+      done
 
       # Process queued alerts now that we have connectivity
       if type process_alert_queue &>/dev/null; then
