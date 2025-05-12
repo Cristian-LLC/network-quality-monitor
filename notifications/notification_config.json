@@ -5,16 +5,13 @@
     "default_channel": "#network-alerts",
     "notifications": {
       "host_down": {
-        "channel": "#network-alerts",
-        "throttle_minutes": 5
+        "channel": "#network-alerts"
       },
       "loss_alert": {
-        "channel": "#network-warnings",
-        "throttle_minutes": 15
+        "channel": "#network-warnings"
       },
       "recovery": {
-        "channel": "#network-alerts",
-        "throttle_minutes": 0
+        "channel": "#network-alerts"
       }
     }
   }

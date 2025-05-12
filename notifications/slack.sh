@@ -6,7 +6,7 @@
 # It sends alerts to Slack channels based on network events and configuration.
 #
 # Author: Cristian O.
-# Version: 1.0.0
+# Version: 1.1.0
 #
 
 # Default locations for configuration
@@ -40,7 +40,7 @@ fi
 is_slack_enabled() {
   local enabled
   enabled=$(jq -r '.slack.enabled // false' "$NOTIFICATION_CONFIG" 2>/dev/null)
-  
+
   if [ "$enabled" = "true" ]; then
     return 0
   else
@@ -75,15 +75,8 @@ validate_slack_webhook() {
 # Get the channel for a specific alert type
 get_slack_channel() {
   local alert_type="$1"
-  
-  jq -r ".slack.notifications.$alert_type.channel // \".slack.default_channel // \"#network-alerts\"\"" "$NOTIFICATION_CONFIG" 2>/dev/null
-}
 
-# Get throttling period for a specific alert type
-get_slack_throttle() {
-  local alert_type="$1"
-  
-  jq -r ".slack.notifications.$alert_type.throttle_minutes // 5" "$NOTIFICATION_CONFIG" 2>/dev/null
+  jq -r ".slack.notifications.$alert_type.channel // \".slack.default_channel // \"#network-alerts\"\"" "$NOTIFICATION_CONFIG" 2>/dev/null
 }
 
 # Send a notification to Slack
@@ -96,20 +89,20 @@ send_slack_alert() {
   local message="$3"
   local webhook_url
   local channel
-  
+
   # Get and validate configuration
   webhook_url=$(get_slack_webhook)
   if ! validate_slack_webhook "$webhook_url"; then
     echo "Error: No Slack webhook URL configured or URL is invalid." >&2
     return 1
   fi
-  
+
   channel=$(get_slack_channel "$alert_type")
-  
+
   # Determine emoji and color based on alert type
   local emoji=""
   local color=""
-  
+
   case "$alert_type" in
     host_down)
       emoji=":red_circle:"
@@ -128,7 +121,7 @@ send_slack_alert() {
       color="$SLACK_COLOR_INFO"
       ;;
   esac
-  
+
   # Build the payload
   local payload
   payload=$(cat << EOF
@@ -150,7 +143,7 @@ send_slack_alert() {
 }
 EOF
   )
-  
+
   # Send to Slack with proper error handling
   local response
   local curl_exit_code

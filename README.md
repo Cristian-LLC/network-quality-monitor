@@ -19,7 +19,6 @@ A powerful bash-based network monitoring tool that provides real-time statistics
 - Slack notification system:
   - Configurable channels for different alert types
   - Event-based notifications (host down, recovery, loss alerts)
-  - Rate limiting to prevent notification storms
 
 ## Requirements
 
@@ -329,16 +328,13 @@ You can configure the script to send alerts to Slack channels when important eve
          "default_channel": "#network-alerts",
          "notifications": {
            "host_down": {
-             "channel": "#network-alerts",
-             "throttle_minutes": 5
+             "channel": "#network-alerts"
            },
            "loss_alert": {
-             "channel": "#network-warnings",
-             "throttle_minutes": 15
+             "channel": "#network-warnings"
            },
            "recovery": {
-             "channel": "#network-alerts",
-             "throttle_minutes": 0
+             "channel": "#network-alerts"
            }
          }
        }
@@ -354,11 +350,6 @@ You can configure the script to send alerts to Slack channels when important eve
    - For each notification type, you can specify a different Slack channel
    - Make sure the channels exist in your Slack workspace
    - Always include the `#` prefix for channel names
-
-5. **Adjust throttling** (optional):
-   - `throttle_minutes` controls how often the same type of notification can be sent for the same host
-   - Set to `0` for no throttling (every event triggers a notification)
-   - Set to higher values to reduce notification frequency during persistent issues
 
 ##### Step 3: Test Your Configuration
 
@@ -471,11 +462,8 @@ The `notification_config.json` file contains all settings for notification integ
 | `slack.webhook_url` | String | Yes | The Slack webhook URL for your workspace. You can create this in Slack's Incoming Webhooks app settings. Must be the complete URL. | `"https://hooks.slack.com/services/T00000/B00000/XXXXXXX"` |
 | `slack.default_channel` | String | No | The default Slack channel to use if a specific notification type doesn't have a channel specified. Must include the `#` prefix. | `"#network-alerts"` |
 | `slack.notifications.host_down.channel` | String | No | The channel where "host down" notifications will be sent. Overrides the default channel for this specific notification type. | `"#critical-alerts"` |
-| `slack.notifications.host_down.throttle_minutes` | Number | No | The minimum time in minutes between repeated "host down" notifications for the same host. Prevents notification spam during persistent outages. | `5` |
 | `slack.notifications.loss_alert.channel` | String | No | The channel where packet loss notifications will be sent. | `"#network-warnings"` |
-| `slack.notifications.loss_alert.throttle_minutes` | Number | No | The minimum time in minutes between repeated loss alert notifications for the same host. | `15` |
 | `slack.notifications.recovery.channel` | String | No | The channel where recovery notifications will be sent when a host comes back up. | `"#network-alerts"` |
-| `slack.notifications.recovery.throttle_minutes` | Number | No | The minimum time in minutes between recovery notifications. Usually set to `0` since recoveries are important and infrequent. | `0` |
 
 
 ## OS Compatibility
